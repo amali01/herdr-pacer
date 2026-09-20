@@ -1,0 +1,47 @@
+id = "herdr-pacer"
+name = "Herdr Pacer"
+version = "0.4.0"
+min_herdr_version = "0.7.5"
+description = "Context-window bars in the agent sidebar rows for Claude, Codex and OpenCode, plus a usage popup for the 5h and weekly windows"
+platforms = ["linux", "macos"]
+
+# Codex and OpenCode cannot report their own context, so Herdr pokes us when an
+# agent's status changes — which is exactly when a turn has just ended.
+[[startup]]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/pacer-panes.sh\" sweep"]
+
+[[events]]
+on = "pane.agent_detected"
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/pacer-panes.sh\" event"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/pacer-panes.sh\" event"]
+
+[[actions]]
+id = "open"
+title = "Open usage"
+command = ["sh", "-c", "exec \"$HERDR_BIN_PATH\" plugin pane open --plugin herdr-pacer --entrypoint usage --focus"]
+
+[[actions]]
+id = "panes-refresh"
+title = "Refresh the context bars now"
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/pacer-panes.sh\" sweep"]
+
+[[actions]]
+id = "claude-hook-install"
+title = "Wrap the Claude Code statusLine (context bars)"
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/claude-hook.sh\" install"]
+
+[[actions]]
+id = "claude-hook-remove"
+title = "Unwrap the Claude Code statusLine"
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/claude-hook.sh\" remove"]
+
+[[panes]]
+id = "usage"
+title = "HERDR usage"
+placement = "popup"
+width = 72
+height = 17
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/usage.sh\""]
