@@ -1,0 +1,186 @@
+From 4d7821d498f37b5c06348a191c506ca3c42395fa Mon Sep 17 00:00:00 2001
+From: amali <amgad@raincode.tech>
+Date: Sun, 20 Sep 2026 19:23:47 +0300
+Subject: [PATCH] feat(sidebar): add glue to render a token flush with the
+ previous one
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Sidebar rows always join their tokens with " · " (or a single space around
+state_icon and git_status). That makes a row a list of separate labels, and
+rules out composing one visual element from several styled tokens — a gauge
+or bar whose used and remaining parts need different colors, for example.
+
+Add `glue = true` to a styled token occurrence: the separator before that
+token is dropped, so it renders flush with the previous one. It is a layout
+property of the occurrence, so value-matched rules never set it.
+---
+ .../src/content/docs/configuration.mdx        |  2 ++
+ src/config/sidebar.rs                         | 29 +++++++++++++++++++
+ src/config/sidebar/rules.rs                   |  4 +++
+ src/main.rs                                   |  1 +
+ src/ui/sidebar/tokens.rs                      | 25 +++++++++++++++-
+ 5 files changed, 60 insertions(+), 1 deletion(-)
+
+diff --git a/docs/next/website/src/content/docs/configuration.mdx b/docs/next/website/src/content/docs/configuration.mdx
+index c54c79a..a126658 100644
+--- a/docs/next/website/src/content/docs/configuration.mdx
++++ b/docs/next/website/src/content/docs/configuration.mdx
+@@ -402,6 +402,8 @@ rows = [
+ ]
+ ```
+ 
++Set `glue = true` on a token occurrence to drop the separator before it, so it renders flush against the previous token. Use it to build one visual element out of several differently styled tokens, such as a bar whose used and remaining halves carry different colors. Glue applies to the occurrence, not the token, and it wins over the single-space separator that follows `state_icon` or precedes `git_status`.
++
+ `fg` accepts strict `#RGB` or `#RRGGBB`. `bold` and `dim` accept booleans. Omitted fields preserve the token's contextual style; explicit `false` removes that modifier. Styling applies to one occurrence, so the same token may look different in another row or agent override. A foreground override replaces all semantic foregrounds inside that occurrence: for example, styled `git_status` ahead and behind counts use one color instead of their default green and red. Token styles never change separators or row backgrounds.
+ 
+ Text-valued tokens also accept up to 16 ordered `rules`. Each rule contains exactly one condition—`equals`, `contains`, `starts_with`, `gt`, or `lt`—and optional `fg`, `bold`, and `dim` overrides:
+diff --git a/src/config/sidebar.rs b/src/config/sidebar.rs
+index 9a4cb5e..3357757 100644
+--- a/src/config/sidebar.rs
++++ b/src/config/sidebar.rs
+@@ -102,6 +102,8 @@ pub struct SidebarTokenStyle {
+     pub fg: Option<SidebarTokenColor>,
+     pub bold: Option<bool>,
+     pub dim: Option<bool>,
++    /// Render this token right after the previous one, with no separator.
++    pub glue: Option<bool>,
+ }
+ 
+ #[derive(Debug, Clone, PartialEq, Eq)]
+@@ -181,6 +183,8 @@ struct RawStyledSidebarToken {
+     #[serde(default)]
+     dim: Option<bool>,
+     #[serde(default)]
++    glue: Option<bool>,
++    #[serde(default)]
+     rules: Vec<SidebarTokenRule>,
+ }
+ 
+@@ -210,6 +214,7 @@ impl RawSidebarToken {
+                         fg: token.fg,
+                         bold: token.bold,
+                         dim: token.dim,
++                        glue: token.glue,
+                     }),
+                     token.rules,
+                 ))
+@@ -262,6 +267,9 @@ where
+     if let Some(dim) = style.dim {
+         map.serialize_entry("dim", &dim)?;
+     }
++    if let Some(glue) = style.glue {
++        map.serialize_entry("glue", &glue)?;
++    }
+     if !rules.is_empty() {
+         map.serialize_entry("rules", rules)?;
+     }
+@@ -513,6 +521,27 @@ mod tests {
+         assert_eq!(config.spaces.row_gap, 0);
+     }
+ 
++    #[test]
++    fn parses_glue_on_a_styled_token() {
++        let config: crate::config::Config = toml::from_str(
++            r##"
++[ui.sidebar.spaces]
++rows = [[{ token = "$arc", fg = "#ff6ea9" }, { token = "$track", fg = "#5a2a3d", glue = true }]]
++"##,
++        )
++        .expect("glue config");
++
++        let row = &config.ui.sidebar.spaces.rows[0];
++        let SpaceSidebarToken::Styled { style, .. } = &row[0] else {
++            panic!("expected a styled token");
++        };
++        assert_eq!(style.glue, None);
++        let SpaceSidebarToken::Styled { style, .. } = &row[1] else {
++            panic!("expected a styled token");
++        };
++        assert_eq!(style.glue, Some(true));
++    }
++
+     #[test]
+     fn parses_builtin_and_arbitrary_custom_tokens() {
+         let config: crate::config::Config = toml::from_str(
+diff --git a/src/config/sidebar/rules.rs b/src/config/sidebar/rules.rs
+index 049e097..d24773f 100644
+--- a/src/config/sidebar/rules.rs
++++ b/src/config/sidebar/rules.rs
+@@ -99,6 +99,9 @@ impl TryFrom<RawRule> for SidebarTokenRule {
+                 fg: raw.fg,
+                 bold: raw.bold,
+                 dim: raw.dim,
++                // `glue` is a layout property of the token occurrence, not of
++                // a value-matched rule, so rules never set it.
++                glue: None,
+             },
+         })
+     }
+@@ -187,6 +190,7 @@ pub(super) fn matching_style(
+                 fg: rule.style.fg.or(base.fg),
+                 bold: rule.style.bold.or(base.bold),
+                 dim: rule.style.dim.or(base.dim),
++                glue: base.glue,
+             });
+         }
+     }
+diff --git a/src/main.rs b/src/main.rs
+index 5d7582c..88a2f8e 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -343,6 +343,7 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
+ # pane, agent, terminal_title, and terminal_title_stripped.
+ # Custom values reported through pane metadata use a $name token.
+ # A token occurrence may be styled with { token = "workspace", fg = "#89b4fa", bold = true, dim = false }.
++# Add glue = true to drop the separator before that token so it renders flush with the previous one.
+ # Omitted style fields preserve the contextual default.
+ # [ui.sidebar.agents]
+ # Blank rows between agent entries. Set to 1 to restore the previous spacing.
+diff --git a/src/ui/sidebar/tokens.rs b/src/ui/sidebar/tokens.rs
+index c1e38aa..16a293d 100644
+--- a/src/ui/sidebar/tokens.rs
++++ b/src/ui/sidebar/tokens.rs
+@@ -178,7 +178,9 @@ pub(crate) fn space_rows(
+ }
+ 
+ pub(crate) fn separator(previous: &ResolvedToken, current: &ResolvedToken) -> &'static str {
+-    if matches!(previous.kind, ResolvedTokenKind::StateIcon)
++    if current.style.glue == Some(true) {
++        ""
++    } else if matches!(previous.kind, ResolvedTokenKind::StateIcon)
+         || matches!(current.kind, ResolvedTokenKind::GitStatus { .. })
+     {
+         " "
+@@ -399,6 +401,27 @@ rows = [[{ token = "$load", rules = [{ lt = 50, hide = true }] }], ["workspace"]
+         }
+     }
+ 
++    #[test]
++    fn glued_tokens_render_without_a_separator() {
++        let plain = ResolvedToken::unstyled(ResolvedTokenKind::Custom("track".into()));
++        let glued = ResolvedToken::new(
++            ResolvedTokenKind::Custom("track".into()),
++            SidebarTokenStyle {
++                glue: Some(true),
++                ..SidebarTokenStyle::default()
++            },
++        );
++        let previous = ResolvedToken::unstyled(ResolvedTokenKind::Custom("arc".into()));
++
++        assert_eq!(separator(&previous, &plain), " · ");
++        assert_eq!(separator(&previous, &glued), "");
++        // glue also wins over the single-space cases
++        assert_eq!(
++            separator(&ResolvedToken::unstyled(ResolvedTokenKind::StateIcon), &glued),
++            ""
++        );
++    }
++
+     #[test]
+     fn missing_custom_tokens_elide_rows_and_separators() {
+         let entry = entry();
+-- 
+2.53.0
+
