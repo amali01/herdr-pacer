@@ -2,6 +2,11 @@
   <img src="assets/logo.svg" alt="herdr-pacer" width="640">
 </p>
 
+<p align="center">
+  <a href="https://herdr.dev/plugins/"><img alt="Listed in the Herdr plugin marketplace" src="https://img.shields.io/badge/herdr-marketplace-4a9eff?style=flat-square&labelColor=15181d"></a>
+  <a href="https://github.com/amali01/herdr-pacer/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/amali01/herdr-pacer?style=flat-square&labelColor=15181d&color=4a9eff"></a>
+</p>
+
 Pacing for the agents [Herdr](https://herdr.dev) runs, in two places:
 
 - **Per session** — a dotted bar under each agent row in the sidebar showing
