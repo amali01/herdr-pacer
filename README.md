@@ -12,25 +12,9 @@ Pacing for the agents [Herdr](https://herdr.dev) runs, in two places:
   agent, same bars, same colors.
 
 <p align="center">
-  <img src="assets/tour.svg" width="960"
-       alt="Left: the Herdr sidebar, a colored bar under each agent showing that session's context window. Right: the usage popup, 5h over weekly for Codex, Claude and OpenCode. Below: the color thresholds and the keys.">
+  <img src="assets/demo.svg" width="960"
+       alt="An animated mock of a Herdr session: the sidebar lists spaces and agents, a colored bar fills in under each agent showing that session's context window, then ctrl+b u opens the usage popup with the 5h and weekly windows for Codex, Claude and OpenCode.">
 </p>
-
-The popup, in plain text:
-
-```
-  HERDR usage
-
-    Codex                                              team
-    5h      ⣤⣤⣤⣤⣤⣤⣤⣤⣤⡄⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀   48%   ⟳ 2h14m
-    weekly  ⣤⣤⣤⣤⣤⣤⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀   31%   ⟳ 3d19h
-
-    Claude
-    5h      ⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⡄   98%   ⟳ 9m
-    weekly  ⣤⣤⣤⣤⣤⣤⣤⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀   34%   ⟳ 4d02h
-
-  r refresh · q close
-```
 
 One number means the same thing wherever it appears: green below 50%, orange
 50-69, yellow 70-89, red from 90 — the thresholds [cc-pacer](https://github.com/amali01/cc-pacer)
@@ -38,11 +22,6 @@ uses, so the two read alike if you run both. Monthly and billing windows are
 deliberately left out; this is about pace.
 
 ## How it works
-
-<p align="center">
-  <img src="assets/how-it-works.svg" width="960"
-       alt="Two paths. Top: the Claude status line, the Codex TUI footer and OpenCode's SQLite feed claude-statusline.sh and pacer-panes.sh, which push pane tokens to Herdr for the sidebar row. Bottom: the Anthropic usage endpoint, codex app-server and omp feed collect.sh, which the popup renders.">
-</p>
 
 Two paths, no polling. Context bars are pushed when a session says something
 new — Claude reports itself from its status line, and for Codex and OpenCode
