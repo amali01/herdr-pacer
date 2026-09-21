@@ -78,6 +78,21 @@ you want OpenCode's context bar. Nothing else — herdr-pacer talks to each
 provider on its own.
 
 ```sh
+herdr plugin install amali01/herdr-pacer
+herdr plugin action invoke herdr-pacer.setup
+```
+
+**The sidebar bars need a Herdr built with `herdr-glue.patch`.** Stock Herdr
+inserts `" · "` between row tokens, straight through the middle of every bar, and
+the option that suppresses it is not upstream (checked through v0.9.1). Without
+the patch nothing breaks — the popup is unaffected and the sidebar bar just
+renders as `used · rail`. To build one, run `./herdr-build.sh` from the plugin
+directory (`herdr plugin list` prints it), install the binary it leaves in
+`target/release/herdr`, then invoke `setup` again.
+
+Or work from a clone, which is also how you'd hack on it:
+
+```sh
 git clone https://github.com/amali01/herdr-pacer.git
 cd herdr-pacer
 ./herdr-build.sh            # builds a patched herdr; prints how to install it

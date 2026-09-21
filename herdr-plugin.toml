@@ -1,6 +1,6 @@
 id = "herdr-pacer"
 name = "Herdr Pacer"
-version = "0.4.0"
+version = "0.5.0"
 min_herdr_version = "0.7.5"
 description = "Context-window bars in the agent sidebar rows for Claude, Codex and OpenCode, plus a usage popup for the 5h and weekly windows"
 platforms = ["linux", "macos"]
@@ -17,6 +17,11 @@ command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/pacer-panes.sh\" event"]
 [[events]]
 on = "pane.agent_status_changed"
 command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/pacer-panes.sh\" event"]
+
+[[actions]]
+id = "setup"
+title = "Set up herdr-pacer (statusLine wrapper, sidebar row, keybinding)"
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/setup.sh\""]
 
 [[actions]]
 id = "open"

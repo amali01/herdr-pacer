@@ -10,17 +10,18 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 CONFIG="${HERDR_CONFIG_PATH:-$HOME/.config/herdr/config.toml}"
+HERDR="${HERDR_BIN_PATH:-herdr}"
 
 echo "==> 1/4 Claude Code statusLine wrapper"
 "$ROOT/claude-hook.sh" install | sed 's/^/    /'
 
 echo "==> 2/4 Herdr with the glue patch"
-if herdr --default-config 2>/dev/null | grep -q 'glue = true'; then
+if "$HERDR" --default-config 2>/dev/null | grep -q 'glue = true'; then
   echo "    glue supported"
 else
   echo "    WARNING: this herdr has no \`glue\` token option, so the context bar"
-  echo "    renders as \"used · rail\". Build a patched herdr with ./herdr-build.sh,"
-  echo "    install it, then rerun."
+  echo "    renders as \"used · rail\". Build a patched herdr with"
+  echo "    $ROOT/herdr-build.sh, install it, then rerun."
 fi
 
 echo "==> 3/4 Herdr config: $CONFIG"
@@ -118,7 +119,7 @@ except Exception as exc:
 PY
 
 echo "==> 4/4 reload Herdr config"
-if herdr server reload-config > /dev/null 2>&1; then
+if "$HERDR" server reload-config > /dev/null 2>&1; then
   echo "    reloaded"
 else
   echo "    no running server (start herdr once; config applies then)"
