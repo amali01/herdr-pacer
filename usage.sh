@@ -9,8 +9,8 @@
 #   HERDR usage
 #
 #     Codex                                              team
-#     5h      ⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀   78%   ⟳ 2h14m
-#     weekly  ⣿⣿⣿⣿⣿⣿⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀   46%   ⟳ 3d19h
+#     5h      ⣤⣤⣤⣤⣤⣤⣤⣤⣤⡄⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀   48%   ⟳ 2h14m
+#     weekly  ⣤⣤⣤⣤⣤⣤⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀   31%   ⟳ 3d19h
 set -uo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")" || exit 1

@@ -1,4 +1,6 @@
-# herdr-pacer
+<p align="center">
+  <img src="assets/logo.svg" alt="herdr-pacer" width="640">
+</p>
 
 Pacing for the agents [Herdr](https://herdr.dev) runs, in two places:
 
@@ -9,23 +11,46 @@ Pacing for the agents [Herdr](https://herdr.dev) runs, in two places:
   **5h** and **weekly** windows for Codex, Claude, and OpenCode, one section per
   agent, same bars, same colors.
 
+<p align="center">
+  <img src="assets/tour.svg" width="960"
+       alt="Left: the Herdr sidebar, a colored bar under each agent showing that session's context window. Right: the usage popup, 5h over weekly for Codex, Claude and OpenCode. Below: the color thresholds and the keys.">
+</p>
+
+The popup, in plain text:
+
 ```
   HERDR usage
 
     Codex                                              team
-    5h      ⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀   48%   ⟳ 2h14m
-    weekly  ⣿⣿⣿⣿⣿⣿⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀   31%   ⟳ 3d19h
+    5h      ⣤⣤⣤⣤⣤⣤⣤⣤⣤⡄⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀   48%   ⟳ 2h14m
+    weekly  ⣤⣤⣤⣤⣤⣤⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀   31%   ⟳ 3d19h
 
     Claude
-    5h      ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇   98%   ⟳ 9m
-    weekly  ⣿⣿⣿⣿⣿⣿⣿⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀   34%   ⟳ 4d02h
+    5h      ⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⡄   98%   ⟳ 9m
+    weekly  ⣤⣤⣤⣤⣤⣤⣤⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀   34%   ⟳ 4d02h
+
+  r refresh · q close
 ```
 
-Colors are cc-pacer's thresholds, so a number means the same thing in both:
-green below 50%, orange 50-69, yellow 70-89, red from 90. Monthly and billing
-windows are deliberately left out; this is about pace.
+One number means the same thing wherever it appears: green below 50%, orange
+50-69, yellow 70-89, red from 90 — the thresholds [cc-pacer](https://github.com/amali01/cc-pacer)
+uses, so the two read alike if you run both. Monthly and billing windows are
+deliberately left out; this is about pace.
 
-## How the sidebar bar works
+## How it works
+
+<p align="center">
+  <img src="assets/how-it-works.svg" width="960"
+       alt="Two paths. Top: the Claude status line, the Codex TUI footer and OpenCode's SQLite feed claude-statusline.sh and pacer-panes.sh, which push pane tokens to Herdr for the sidebar row. Bottom: the Anthropic usage endpoint, codex app-server and omp feed collect.sh, which the popup renders.">
+</p>
+
+Two paths, no polling. Context bars are pushed when a session says something
+new — Claude reports itself from its status line, and for Codex and OpenCode
+Herdr pokes us on `pane.agent_status_changed`, which is exactly when a turn
+ends. The 5h and weekly numbers are fetched on demand, cached, and refreshed
+while the popup is open.
+
+### The sidebar row
 
 Herdr has no plugin API for drawing in the sidebar, but agent rows accept custom
 `$tokens` reported per pane, and a row whose tokens are all unreported
@@ -48,6 +73,10 @@ the patch lives here and is re-applied per release with `./herdr-build.sh`.
 
 ## Install
 
+Needs `bash`, `jq`, `curl` and `python3`, plus Herdr itself; `sqlite3` only if
+you want OpenCode's context bar. Nothing else — herdr-pacer talks to each
+provider on its own.
+
 ```sh
 git clone https://github.com/amali01/herdr-pacer.git
 cd herdr-pacer
@@ -63,9 +92,10 @@ herdr plugin link .
 3. adds the context-bar row and the keybinding to `config.toml`, and
 4. reloads Herdr.
 
-The wrapper is a pass-through: **cc-pacer keeps drawing the status line exactly
-as before**, and the wrapper only reads the context percentage out of the
-payload on its way past. `./claude-hook.sh remove` puts the original command
+The wrapper is a pass-through: **whatever already drew your status line keeps
+drawing it**, and the wrapper only reads the context percentage out of the
+payload on its way past. If nothing was there before, it prints a minimal
+`ctx N%` line of its own. `./claude-hook.sh remove` puts the original command
 back.
 
 ## Where the numbers come from
@@ -76,13 +106,10 @@ back.
 | Codex context | the composer footer — `herdr pane read` picks up the `Context N% left` the TUI already prints | nothing |
 | OpenCode context | its SQLite: the last turn's `tokens.total` for the session in that pane's directory, over the model's context limit from opencode's models cache | `sqlite3` |
 | Codex 5h / weekly | `codex app-server` → `account/rateLimits/read` | signed-in `codex` CLI |
-| Claude 5h / weekly | `api.anthropic.com/api/oauth/usage`, or cc-pacer's cache when it is warm | signed-in Claude Code |
+| Claude 5h / weekly | `api.anthropic.com/api/oauth/usage` — cc-pacer's cache is reused when it happens to be warm | signed-in Claude Code |
 | OpenCode 5h / weekly | `omp usage --json` | `omp` on `PATH` |
 
-Claude reports itself from its status line. Codex and OpenCode have no such
-hook, so Herdr's own `[[events]]` do the work: on `pane.agent_status_changed` —
-which is exactly when a turn ends — `pacer-panes.sh` refreshes that pane's bar,
-and a startup sweep covers sessions that were already running. Nothing polls.
+A startup sweep covers sessions that were already running when Herdr started.
 
 No credential file is written; the Claude bearer token reaches `curl` through
 stdin so it never shows up in the process table. The OpenCode database is opened
@@ -122,7 +149,10 @@ Colors live in `config.toml`, not in the reporter — Herdr styles the tokens.
 ## Credits
 
 - [Kamyil/herdr-usage-popup](https://github.com/Kamyil/herdr-usage-popup) — provider collectors.
-- [amali01/cc-pacer](https://github.com/amali01/cc-pacer) — the Claude usage endpoint, its cache, and the thresholds. cc-pacer still owns the status line; herdr-pacer adds the Herdr-side view.
+- [amali01/cc-pacer](https://github.com/amali01/cc-pacer) — where the Claude usage
+  endpoint and the color thresholds came from. **Not a dependency:** herdr-pacer
+  fetches usage itself and only borrows cc-pacer's cache when it is already warm,
+  and if cc-pacer is drawing your status line the wrapper leaves it drawing it.
 
 MIT, except `herdr-glue.patch`, which is a change to Herdr and carries Herdr's
 Apache-2.0 license.
