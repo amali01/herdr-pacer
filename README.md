@@ -21,7 +21,7 @@ Pacing for the agents [Herdr](https://herdr.dev) runs, in two places:
 
 <p align="center">
   <img src="assets/demo.svg" width="960"
-       alt="An animated mock of a Herdr session: the sidebar lists spaces and agents and a colored bar fills in under each agent showing that session's context window; then ctrl+b u brings up the usage dock along the bottom of the tab with the 5h and weekly windows for Codex, Claude and OpenCode, and a click on its ✕ hides it again.">
+       alt="An animated mock of a Herdr session with the usage dock along the bottom and a context bar under each agent. The pointer clicks the dock's gear to open the settings, turns on the monthly window and three-row dots — the dock grows a row and its bars thicken — then turns on the sidebar's 5h and weekly bars, which appear under every agent. q closes the settings, and ctrl+b u hides the dock and brings it back.">
 </p>
 
 One number means the same thing wherever it appears: green below 50%, orange
