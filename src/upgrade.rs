@@ -86,10 +86,15 @@ pub fn newer(candidate: &str, than: &str) -> bool {
     parse(candidate) > parse(than)
 }
 
+/// The version on main. Through the contents API rather than
+/// raw.githubusercontent.com, whose CDN serves a file up to five minutes stale
+/// — long enough to miss a release that just landed.
 fn published() -> Result<String, String> {
-    let url = format!("https://raw.githubusercontent.com/{REPO}/main/herdr-plugin.toml");
+    let url = format!("https://api.github.com/repos/{REPO}/contents/herdr-plugin.toml?ref=main");
     let body = ureq::get(&url)
         .timeout(std::time::Duration::from_secs(10))
+        .set("Accept", "application/vnd.github.raw")
+        .set("User-Agent", "herdr-pacer")
         .call()
         .map_err(|e| format!("could not reach GitHub: {e}"))?
         .into_string()
