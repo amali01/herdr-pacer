@@ -1,6 +1,6 @@
 id = "herdr-pacer"
 name = "Herdr Pacer"
-version = "0.8.0"
+version = "0.9.0"
 min_herdr_version = "0.9.0"
 description = "Context-window bars in the agent sidebar rows for Claude, Codex and OpenCode, plus the 5h and weekly windows in a dock along the bottom of every tab and in the tab bar"
 platforms = ["linux", "macos"]
@@ -100,6 +100,6 @@ command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" d
 id = "settings"
 title = "herdr-pacer settings"
 placement = "popup"
-width = 68
-height = 21
+width = 74
+height = 24
 command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" settings"]

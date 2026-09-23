@@ -20,25 +20,65 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-// ── the dotted bar (braille), shared with the sidebar bars ──
+// ── the bar, shared by every surface ──
 
-const RAIL: char = '⣀'; // one dot row, so the track still reads without color
+/// How a bar is drawn. Each has a size, 1–3, whose meaning is its own:
+/// dot rows for Dots, height for Bar, fill shade for Blocks; Slants has one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Style {
+    Dots,
+    Bar,
+    Blocks,
+    Slants,
+}
 
-/// (used, rail) for `pct` over `cells` cells, two dot columns per cell,
-/// `dots` rows tall (1–3): ⣀ ⣤ ⣶ for a full cell, ⡀ ⡄ ⡆ for a half one.
-pub fn bar(pct: u32, cells: usize, dots: u8) -> (String, String) {
-    let (full, half) = match dots {
-        1 => ('⣀', '⡀'),
-        3 => ('⣶', '⡆'),
-        _ => ('⣤', '⡄'),
-    };
-    let halves = (pct.min(100) as usize * cells * 2 + 50) / 100;
+impl Style {
+    pub const ALL: [Style; 4] = [Style::Dots, Style::Bar, Style::Blocks, Style::Slants];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Style::Dots => "dots",
+            Style::Bar => "bar",
+            Style::Blocks => "blocks",
+            Style::Slants => "slants",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Style> {
+        Style::ALL.into_iter().find(|s| s.name() == name)
+    }
+
+    /// (full cell, half cell, empty cell). The empty cell differs from the
+    /// full one in shape as well as color, so a bar still reads where color
+    /// is stripped (the tab bar) — except one dot row, which is the rail.
+    fn glyphs(self, size: u8) -> (char, Option<char>, char) {
+        match (self, size) {
+            (Style::Dots, 1) => ('⣀', Some('⡀'), '⣀'),
+            (Style::Dots, 3) => ('⣶', Some('⡆'), '⣀'),
+            (Style::Dots, _) => ('⣤', Some('⡄'), '⣀'),
+            (Style::Bar, 1) => ('▂', None, '▁'),
+            (Style::Bar, 3) => ('▆', None, '▁'),
+            (Style::Bar, _) => ('▄', None, '▁'),
+            (Style::Blocks, 1) => ('▒', None, '░'),
+            (Style::Blocks, 2) => ('▓', None, '░'),
+            (Style::Blocks, _) => ('█', None, '░'),
+            (Style::Slants, _) => ('▰', None, '▱'),
+        }
+    }
+}
+
+/// (used, rail) for `pct` over `cells` cells. Dots count half cells (two dot
+/// columns a cell); the others fill whole cells.
+pub fn bar(pct: u32, cells: usize, style: Style, size: u8) -> (String, String) {
+    let (full, half, empty) = style.glyphs(size);
+    let steps = if half.is_some() { 2 } else { 1 };
+    let filled = (pct.min(100) as usize * cells * steps + 50) / 100;
     let (mut used, mut rail) = (String::new(), String::new());
     for i in 0..cells {
-        match halves.saturating_sub(i * 2) {
-            d if d >= 2 => used.push(full),
-            1 => used.push(half),
-            _ => rail.push(RAIL),
+        match filled.saturating_sub(i * steps) {
+            d if d >= steps => used.push(full),
+            1 => used.extend(half),
+            _ => rail.push(empty),
         }
     }
     (used, rail)
@@ -516,13 +556,20 @@ mod tests {
 
     #[test]
     fn bar_halves_and_rail() {
-        assert_eq!(bar(0, 4, 2), ("".into(), "⣀⣀⣀⣀".into()));
-        assert_eq!(bar(50, 4, 2), ("⣤⣤".into(), "⣀⣀".into()));
-        assert_eq!(bar(63, 4, 2), ("⣤⣤⡄".into(), "⣀".into()));
-        assert_eq!(bar(100, 4, 2), ("⣤⣤⣤⣤".into(), "".into()));
-        assert_eq!(bar(250, 2, 2), ("⣤⣤".into(), "".into()));
-        assert_eq!(bar(63, 4, 1), ("⣀⣀⡀".into(), "⣀".into()));
-        assert_eq!(bar(63, 4, 3), ("⣶⣶⡆".into(), "⣀".into()));
+        let dots = |pct, cells, size| bar(pct, cells, Style::Dots, size);
+        assert_eq!(dots(0, 4, 2), ("".into(), "⣀⣀⣀⣀".into()));
+        assert_eq!(dots(50, 4, 2), ("⣤⣤".into(), "⣀⣀".into()));
+        assert_eq!(dots(63, 4, 2), ("⣤⣤⡄".into(), "⣀".into()));
+        assert_eq!(dots(100, 4, 2), ("⣤⣤⣤⣤".into(), "".into()));
+        assert_eq!(dots(250, 2, 2), ("⣤⣤".into(), "".into()));
+        assert_eq!(dots(63, 4, 1), ("⣀⣀⡀".into(), "⣀".into()));
+        assert_eq!(dots(63, 4, 3), ("⣶⣶⡆".into(), "⣀".into()));
+        assert_eq!(bar(63, 4, Style::Bar, 1), ("▂▂▂".into(), "▁".into()), "whole cells");
+        assert_eq!(bar(50, 4, Style::Bar, 3), ("▆▆".into(), "▁▁".into()));
+        assert_eq!(bar(50, 4, Style::Blocks, 1), ("▒▒".into(), "░░".into()));
+        assert_eq!(bar(50, 4, Style::Blocks, 3), ("██".into(), "░░".into()));
+        assert_eq!(bar(75, 4, Style::Slants, 2), ("▰▰▰".into(), "▱".into()));
+        assert!(Style::ALL.iter().all(|&s| Style::from_name(s.name()) == Some(s)));
     }
 
     #[test]
