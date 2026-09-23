@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # herdr-pacer — collect.sh
-# Provider collectors shared by the popup gauges (usage.sh) and the sidebar
-# pusher (pacer-sidebar.sh). Sourced, never executed.
+# Provider collectors and the dotted bar, shared by the usage dock and popup
+# (usage.sh) and the context bars (claude-statusline.sh, pacer-panes.sh).
+# Sourced, never executed.
 #
 # Row contract (unit-separated):
 #   provider <US> plan <US> account <US> window <US> percent <US> resets_at
@@ -58,7 +59,7 @@ duration() { # seconds -> 3d19h / 46m / now
 # Both surfaces draw the same shape: the used part in dense dots, the rest as a
 # thin rail. `bar` prints "used<TAB>rail" (split it with ${out%%$'\t'*}, not read,
 # which would swallow an empty half) so the sidebar can color the halves as
-# two tokens and the popup can color them inline.
+# two tokens and usage.sh can color them inline.
 BAR_FULL=⣤    # two dot rows: a thin bar, not a full-height block
 BAR_HALF=⡄
 BAR_RAIL=⣀    # one row, so the track still reads without color
