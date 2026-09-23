@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # herdr-pacer — setup.sh
 # One-command setup: wraps the Claude statusLine so each session reports its
-# context window, adds the context-bar row and the popup keybinding to
-# config.toml, and reloads Herdr.
+# context window, adds the context-bar row and the keybindings to config.toml,
+# reloads Herdr, and docks usage in the current tab.
 #
 # Usage: ./setup.sh
 # Idempotent. A timestamped backup is kept next to each file it touches.
@@ -93,19 +93,48 @@ if found and "pacer_bar" in text[found[1]:found[2]]:
     text = text[:start] + chunk + text[end:]
     print("    removed the old $pacer_bar row")
 
-if "herdr-pacer.open" not in text:
+# prefix+u (or U) shows or hides the dock. Older setups bound it to the popup,
+# with a bare ctrl+u that swallowed the shell's and Claude Code's line delete;
+# repoint that, move a stock key list to the prefix-only one, drop old extras.
+DOCK_KEY = 'key = ["prefix+u", "prefix+shift+u"]'
+OLD_KEYS = ('key = ["prefix+u", "ctrl+u"]', 'key = "prefix+u"')
+
+
+def command_blocks():
+    return list(re.finditer(r"^\[\[keys\.command\]\]\n(?:(?!\[).*\n?)*", text, re.M))
+
+for block in reversed(command_blocks()):
+    body = block.group(0)
+    if '"herdr-pacer.dock-collapse"' in body or (
+            '"herdr-pacer.dock-toggle"' in body and 'key = "prefix+shift+u"' in body):
+        text = text[: block.start()] + text[block.end():]
+        print("    removed an old dock binding")
+    elif '"herdr-pacer.open"' in body:
+        body = body.replace('"herdr-pacer.open"', '"herdr-pacer.dock-toggle"')
+        body = re.sub(r'^description = .*$', 'description = "show or hide the usage dock"',
+                      body, flags=re.M)
+        text = text[: block.start()] + body + text[block.end():]
+        print("    repointed the usage key to the dock")
+for block in reversed(command_blocks()):
+    body = block.group(0)
+    if '"herdr-pacer.dock-toggle"' in body and any(old in body for old in OLD_KEYS):
+        for old in OLD_KEYS:
+            body = body.replace(old, DOCK_KEY)
+        text = text[: block.start()] + body + text[block.end():]
+        print("    dock key is now prefix+u / prefix+U (ctrl+u is free again)")
+if '"herdr-pacer.dock-toggle"' not in text:
     if not text.endswith("\n"):
         text += "\n"
     text += (
         '\n[[keys.command]]\n'
-        'key = ["prefix+u", "ctrl+u"]\n'
+        '%s\n'
         'type = "plugin_action"\n'
-        'command = "herdr-pacer.open"\n'
-        'description = "open usage"\n'
+        'command = "herdr-pacer.dock-toggle"\n'
+        'description = "show or hide the usage dock"\n' % DOCK_KEY
     )
-    print("    added the prefix+u keybinding")
+    print("    bound prefix+u / prefix+U to show or hide the dock")
 else:
-    print("    keybinding already present")
+    print("    dock key already bound")
 
 open(config_path, "w").write(text)
 
@@ -118,13 +147,17 @@ except Exception as exc:
     sys.exit("    config.toml is not valid TOML after patching: %s" % exc)
 PY
 
-echo "==> 4/4 reload Herdr config"
+echo "==> 4/4 reload Herdr config and dock usage"
 if "$HERDR" server reload-config > /dev/null 2>&1; then
   echo "    reloaded"
+  python3 "$ROOT/dock.py" ensure &&
+    echo "    usage docked in this tab; other tabs dock as you visit them"
 else
   echo "    no running server (start herdr once; config applies then)"
 fi
 
 echo
 echo "done — context bars appear under each Claude session as its status line"
-echo "refreshes; press the prefix key then u (ctrl+b u) for global usage."
+echo "refreshes, and the 5h and weekly windows sit in a dock along the bottom of"
+echo "every tab: the prefix key then u or U (ctrl+b u) shows or hides it, and"
+echo "its ✕ button hides it."
