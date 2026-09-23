@@ -117,8 +117,8 @@ the tab bar — which it runs every 30 seconds and shows the last line of. The
 inspiration is [herdr-status-ui-bar](https://github.com/speardragon/herdr-status-ui-bar);
 the segments are drawn by the same binary from the same cache as the dock.
 
-- **Plain text.** Herdr strips color from the tab bar, so the dots carry how
-  full a window is; `numbers` drops them for `Claude 5h 98% · wk 34%`.
+- **Plain text.** Herdr strips color from the tab bar, so the bar's shape
+  carries how full a window is; `numbers` drops it for `Claude 5h 98% · wk 34%`.
 - **Your own entries stay.** A zoom indicator, a clock or another plugin's
   widget in `tab_bar_right` keeps its place; herdr-pacer's go last, and all of
   them come out again when no agent is on.
@@ -134,21 +134,38 @@ option or move with the arrows and press space. Every change applies at once.
 
 ```
 Usage dock
-  Agents    [x] Codex    [x] Claude   [x] OpenCode
-  Windows   [x] 5h       [x] Weekly   [ ] Monthly
-  Dots      ( ) 1 row    (•) 2 rows   ( ) 3 rows
+  Agents     [x] Codex    [x] Claude   [x] OpenCode
+  Windows    [x] 5h       [x] Weekly   [ ] Monthly
+  Style      (•) Dots   ( ) Bar   ( ) Blocks  ( ) Slants
+  Rows       ( ) 1 row    (•) 2 rows   ( ) 3 rows       ⣤⣤⣤⣤⣤⣀⣀⣀ 64%
 Agent sidebar
-  Show      [x] Context  [ ] 5h       [ ] Weekly
-  Layout    (•) a row each            ( ) one line
-  Dots      ( ) 1 row    (•) 2 rows   ( ) 3 rows
+  Show       [x] Context  [ ] 5h       [ ] Weekly
+  Layout     (•) a row each            ( ) one line
+  Style      (•) Dots   ( ) Bar   ( ) Blocks  ( ) Slants
+  Rows       ( ) 1 row    (•) 2 rows   ( ) 3 rows       ⣤⣤⣤⣤⣤⣀⣀⣀ 64%
 Tab bar
-  Show      [ ] Codex    [ ] Claude   [ ] OpenCode
-  Windows   [x] 5h       [x] Weekly   [ ] Monthly
-  Bar       ( ) numbers  ( ) 1 row    (•) 2 rows   ( ) 3 rows
+  Show       [ ] Codex    [ ] Claude   [ ] OpenCode
+  Windows    [x] 5h       [x] Weekly   [ ] Monthly
+  Style      (•) Dots   ( ) Bar   ( ) Blocks  ( ) Slants  ( ) numbers
+  Rows       ( ) 1 row    (•) 2 rows   ( ) 3 rows       ⣤⣤⣤⣤⣤⣀⣀⣀ 64%
 ```
 
-Dots are the bar's thickness — `⣀`, `⣤` or `⣶` — set apart for the dock, the
-sidebar and the tab bar. The sidebar's 5h and weekly bars are the account's, so a Claude session
+Each place draws its bars in a style of its own. The row under **Style** is
+named for what it changes in that style, and a preview beside it shows the
+result before you close the popup:
+
+| Style | The row under it | Choices |
+|---|---|---|
+| **Dots** | Rows — how many dot rows | `⣀⣀⣀⣀` 1 row · `⣤⣤⣤⣀` 2 rows · `⣶⣶⣶⣀` 3 rows |
+| **Bar** | Thickness | `▂▂▂▁` thin · `▄▄▄▁` medium · `▆▆▆▁` thick |
+| **Blocks** | Shade — how solid the fill is | `▒▒▒░` light · `▓▓▓░` medium · `███░` solid |
+| **Slants** | Size | `▰▰▰▱` — one size |
+
+The tab bar also offers **numbers**, the percentages alone. Every style draws the
+empty part in a different shape from the filled one, so a bar still reads in the
+tab bar, where Herdr allows no color.
+
+The sidebar's 5h and weekly bars are the account's, so a Claude session
 shows Claude's windows and a Codex session Codex's; they refresh on each agent
 turn, dock or no dock. The choices live in `settings.json` in the plugin's config
 directory (`herdr plugin config-dir herdr-pacer`); switching the layout rewrites
