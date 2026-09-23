@@ -1,69 +1,78 @@
 id = "herdr-pacer"
 name = "Herdr Pacer"
-version = "0.6.0"
-min_herdr_version = "0.7.5"
+version = "0.7.0"
+min_herdr_version = "0.9.0"
 description = "Context-window bars in the agent sidebar rows for Claude, Codex and OpenCode, plus the 5h and weekly windows in a dock along the bottom of every tab"
 platforms = ["linux", "macos"]
+
+# One binary does everything; Herdr builds it on install and on update.
+[[build]]
+command = ["cargo", "build", "--release"]
 
 # Codex and OpenCode cannot report their own context, so Herdr pokes us when an
 # agent's status changes — which is exactly when a turn has just ended.
 [[startup]]
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/pacer-panes.sh\" sweep"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" panes sweep"]
 
-# The usage dock: a pane along the bottom of every tab. Tabs dock when they are
-# created or visited, so a restored session heals as you move around.
 [[startup]]
-command = ["sh", "-c", "exec python3 \"$HERDR_PLUGIN_ROOT/dock.py\" ensure"]
-
-[[events]]
-on = "tab.created"
-command = ["sh", "-c", "exec python3 \"$HERDR_PLUGIN_ROOT/dock.py\" ensure"]
-
-[[events]]
-on = "tab.focused"
-command = ["sh", "-c", "exec python3 \"$HERDR_PLUGIN_ROOT/dock.py\" ensure"]
-
-[[events]]
-on = "workspace.focused"
-command = ["sh", "-c", "exec python3 \"$HERDR_PLUGIN_ROOT/dock.py\" ensure"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" ensure"]
 
 [[events]]
 on = "pane.agent_detected"
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/pacer-panes.sh\" event"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" panes event"]
 
 [[events]]
 on = "pane.agent_status_changed"
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/pacer-panes.sh\" event"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" panes event"]
+
+# The usage dock: a pane along the bottom of every tab. Tabs dock when they are
+# created or visited, so a restored session heals as you move around.
+[[events]]
+on = "tab.created"
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" ensure"]
+
+[[events]]
+on = "tab.focused"
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" ensure"]
+
+[[events]]
+on = "workspace.focused"
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" ensure"]
 
 [[actions]]
 id = "setup"
-title = "Set up herdr-pacer (statusLine wrapper, sidebar row, keybinding)"
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/setup.sh\""]
-
-[[actions]]
-id = "open"
-title = "Open usage"
-command = ["sh", "-c", "exec \"$HERDR_BIN_PATH\" plugin pane open --plugin herdr-pacer --entrypoint usage --focus"]
+title = "Set up herdr-pacer (statusLine wrapper, sidebar row, dock key)"
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" setup"]
 
 [[actions]]
 id = "dock-toggle"
 title = "Show or hide the usage dock"
-command = ["sh", "-c", "exec python3 \"$HERDR_PLUGIN_ROOT/dock.py\" toggle"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" toggle"]
+
+[[actions]]
+id = "settings"
+title = "Usage dock and sidebar settings"
+command = ["sh", "-c", "exec \"$HERDR_BIN_PATH\" plugin pane open --plugin herdr-pacer --entrypoint settings --focus"]
+
+[[actions]]
+id = "open"
+title = "Open usage as a popup"
+command = ["sh", "-c", "exec \"$HERDR_BIN_PATH\" plugin pane open --plugin herdr-pacer --entrypoint usage --focus"]
 
 [[actions]]
 id = "panes-refresh"
 title = "Refresh the context bars now"
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/pacer-panes.sh\" sweep"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" panes sweep"]
 
 [[actions]]
 id = "claude-hook-install"
 title = "Wrap the Claude Code statusLine (context bars)"
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/claude-hook.sh\" install"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" claude-hook install"]
 
 [[actions]]
 id = "claude-hook-remove"
 title = "Unwrap the Claude Code statusLine"
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/claude-hook.sh\" remove"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" claude-hook remove"]
 
 [[panes]]
 id = "usage"
@@ -71,11 +80,20 @@ title = "HERDR usage"
 placement = "popup"
 width = 72
 height = 17
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/usage.sh\""]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" popup"]
 
-# Opened by dock.py as a split along the bottom of each tab.
+# Opened by `herdr-pacer ensure` as a split along the bottom of each tab.
 [[panes]]
 id = "dock"
 title = "usage"
 placement = "split"
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/usage.sh\" dock"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" dock"]
+
+# Opened by the dock's ⚙: what the dock and the sidebar bars show.
+[[panes]]
+id = "settings"
+title = "herdr-pacer settings"
+placement = "popup"
+width = 62
+height = 16
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" settings"]

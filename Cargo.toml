@@ -1,0 +1,19 @@
+[package]
+name = "herdr-pacer"
+version = "0.7.0"
+edition = "2021"
+rust-version = "1.89"
+description = "Context-window bars and 5h/weekly usage for the agents Herdr runs"
+license = "MIT"
+publish = false
+
+[dependencies]
+crossterm = "0.28"
+# keeps a user's key order when the Claude settings file is rewritten
+serde_json = { version = "1.0", features = ["preserve_order"] }
+toml_edit = "0.22"
+ureq = "2.12"
+
+[profile.release]
+opt-level = "s"
+strip = true
