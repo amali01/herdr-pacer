@@ -374,6 +374,21 @@ fn mtime(path: &Path) -> i64 {
         .map_or(0, |d| d.as_secs() as i64)
 }
 
+fn pct(window: &Value) -> Option<f64> {
+    window["utilization"].as_f64().or(window["used_percentage"].as_f64())
+}
+
+/// Whether a usage payload has a 5h or weekly window the dock can draw.
+fn has_windows(body: &str) -> bool {
+    serde_json::from_str::<Value>(body).is_ok_and(|v| pct(&v["five_hour"]).or(pct(&v["seven_day"])).is_some())
+}
+
+/// A cache's mtime, or 0 when it has nothing to draw, so a real one always
+/// replaces it and it never holds off a refresh.
+fn usable_mtime(path: &Path) -> i64 {
+    if fs::read_to_string(path).is_ok_and(|b| has_windows(&b)) { mtime(path) } else { 0 }
+}
+
 /// The Claude usage payload, refreshed when older than HERDR_PACER_CLAUDE_REFRESH.
 fn claude_usage(state: &Path) -> Option<Value> {
     let cache = state.join("claude-usage.json");
@@ -382,17 +397,22 @@ fn claude_usage(state: &Path) -> Option<Value> {
     // our uid is the owner of our own state directory
     let uid = fs::metadata(state).ok().map(|m| std::os::unix::fs::MetadataExt::uid(&m));
     if let Some(dirs) = uid.and_then(|uid| fs::read_dir(format!("/tmp/cc-pacer-{uid}")).ok()) {
+        // not every cache there is real: cc-pacer's install preview leaves a
+        // sample one with no windows in it, so only a payload with them counts
+        let ours = usable_mtime(&cache);
         let newest = dirs
             .filter_map(|d| Some(d.ok()?.path().join("usage-cache.json")))
-            .filter(|p| p.is_file())
-            .max_by_key(|p| mtime(p));
-        if let Some(newest) = newest.filter(|p| mtime(p) > mtime(&cache)) {
-            let _ = fs::copy(newest, &cache);
+            .filter(|p| p.is_file() && mtime(p) > ours)
+            .filter_map(|p| Some((mtime(&p), fs::read_to_string(&p).ok()?)))
+            .filter(|(_, body)| has_windows(body))
+            .max_by_key(|(t, _)| *t);
+        if let Some((_, body)) = newest {
+            let _ = write_atomic(&cache, body.as_bytes());
         }
     }
     let refresh: i64 = env_or(&["HERDR_PACER_CLAUDE_REFRESH"], "300").parse().unwrap_or(300);
     let backoff_until: i64 = fs::read_to_string(&backoff).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0);
-    if now() - mtime(&cache) > refresh && now() > backoff_until {
+    if now() - usable_mtime(&cache) > refresh && now() > backoff_until {
         if let Some(token) = claude_token() {
             let fresh = ureq::get("https://api.anthropic.com/api/oauth/usage")
                 .timeout(Duration::from_secs(5))
@@ -403,7 +423,7 @@ fn claude_usage(state: &Path) -> Option<Value> {
                 .call()
                 .ok()
                 .and_then(|r| r.into_string().ok())
-                .filter(|body| serde_json::from_str::<Value>(body).is_ok_and(|v| !v["five_hour"].is_null()));
+                .filter(|body| has_windows(body));
             match fresh {
                 Some(body) => {
                     let _ = write_atomic(&cache, body.as_bytes());
@@ -421,7 +441,7 @@ fn claude_usage(state: &Path) -> Option<Value> {
 
 fn claude(state: &Path) -> Vec<Row> {
     const KEY: &str = "claude";
-    let usage = claude_usage(state).filter(|u| !u["five_hour"].is_null() || !u["seven_day"].is_null());
+    let usage = claude_usage(state).filter(|u| pct(&u["five_hour"]).or(pct(&u["seven_day"])).is_some());
     let Some(usage) = usage else {
         return match on_path("claude") {
             Some(_) => vec![Row::error(KEY, "no usage yet — sign in to Claude Code")],
@@ -436,7 +456,7 @@ fn claude(state: &Path) -> Vec<Row> {
     }
     for (label, key) in [("5h", "five_hour"), ("7d", "seven_day")] {
         let d = &usage[key];
-        if let Some(pct) = d["utilization"].as_f64().or(d["used_percentage"].as_f64()) {
+        if let Some(pct) = pct(d) {
             rows.push(Row::window(KEY, "", label.into(), pct.round(), epoch(&d["resets_at"])));
         }
     }
@@ -570,6 +590,14 @@ mod tests {
         assert_eq!(bar(50, 4, Style::Blocks, 3), ("██".into(), "░░".into()));
         assert_eq!(bar(75, 4, Style::Slants, 2), ("▰▰▰".into(), "▱".into()));
         assert!(Style::ALL.iter().all(|&s| Style::from_name(s.name()) == Some(s)));
+    }
+
+    #[test]
+    fn only_payloads_with_windows_count() {
+        assert!(has_windows(r#"{"five_hour":{"utilization":5.0},"seven_day":null}"#));
+        assert!(!has_windows(r#"{"extra_usage":{"is_enabled":true,"utilization":80}}"#), "cc-pacer's preview sample");
+        assert!(!has_windows(r#"{"five_hour":{},"seven_day":false}"#), "nothing to draw");
+        assert!(!has_windows("not json"));
     }
 
     #[test]
