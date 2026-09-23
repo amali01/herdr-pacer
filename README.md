@@ -9,13 +9,15 @@
 
 Pacing for the agents [Herdr](https://herdr.dev) runs, in two places:
 
-- **Per session** — a dotted bar under each agent row in the sidebar showing
-  that session's context window, colored by how full it is. Claude Code, Codex,
+- **Per session** — dotted bars under each agent row in the sidebar: that
+  session's context window, and if you like the **5h** and **weekly** windows
+  of the account it runs on, colored by how full they are. Claude Code, Codex,
   and OpenCode.
-- **Globally** — a dock along the bottom of every tab with the **5h** and
-  **weekly** windows for Codex, Claude, and OpenCode, same bars, same colors.
-  The prefix key then `u` or `U` (`ctrl+b u`) shows or hides it; its `⟳` and
-  `✕` buttons refresh and hide it with the mouse.
+- **Globally** — a dock along the bottom of every tab with the **5h**,
+  **weekly** and, if you want it, **monthly** windows for Codex, Claude, and
+  OpenCode, same bars, same colors. The prefix key then `u` or `U`
+  (`ctrl+b u`) shows or hides it; its `⚙`, `⟳` and `✕` buttons open the
+  settings, refresh, and hide it with the mouse.
 
 <p align="center">
   <img src="assets/demo.svg" width="960"
@@ -36,12 +38,21 @@ ends. The 5h and weekly numbers are fetched on demand, cached, and refreshed
 every minute while a dock or the popup is open. Every dock and the popup share
 one cache, so a dock per tab still costs one fetch a minute.
 
-### The sidebar row
+### The sidebar rows
 
 Herdr has no plugin API for drawing in the sidebar, but agent rows accept custom
 `$tokens` reported per pane, and a row whose tokens are all unreported
-disappears. So the bar rides on pane metadata, and shows up only for sessions
-that report one.
+disappears. So the bars ride on pane metadata, and show up only for sessions
+that report one — and only for what the settings turn on.
+
+```
+ctx  58% ⣤⣤⣤⣤⣤⣤⣀⣀⣀⣀      a row each                ctx 58%⠀5h 13%⠀wk 49%    one line
+5h   13% ⣤⡄⣀⣀⣀⣀⣀⣀⣀⣀
+wk   49% ⣤⣤⣤⣤⣤⣀⣀⣀⣀⣀
+```
+
+On one line the bars shrink with the number of metrics — a full bar for one, a
+stub for two, the numbers alone for three — so the line fits the sidebar.
 
 Two details made it work:
 
@@ -51,8 +62,10 @@ Two details made it work:
   differently styled tokens rendered flush.
 - **The bar carries its color in its token name.** Herdr's `rules` can recolor a
   token by value, but only when the value parses as a number — and a bar is
-  braille. So the status line reports exactly one of `pacer_ctx_{ok,warn,hot,crit}_u`
-  and clears the other three; `config.toml` gives each its color.
+  braille. So each metric reports exactly one of `pacer_<m>_{ok,warn,hot,crit}`
+  (label, percentage and the used dots) and clears the other three, and
+  `pacer_<m>` is the gray rail; `config.toml` gives each its color. Five tokens a
+  metric keeps all three on one line inside Herdr's limit of 16 a row.
 
 Herdr does not accept unsolicited pull requests (see its `CONTRIBUTING.md`), so
 the patch lives here and is re-applied per release with `./herdr-build.sh`.
@@ -60,8 +73,8 @@ the patch lives here and is re-applied per release with `./herdr-build.sh`.
 ### The usage dock
 
 Herdr gives plugins no room of their own outside the tab, so the dock is an
-ordinary pane that `dock.py` keeps along the bottom with stock API calls — no
-patch. The approach is [herdr-sidebar](https://github.com/alexarthurs/herdr-sidebar)'s.
+ordinary pane that `herdr-pacer ensure` keeps along the bottom with stock API
+calls — no patch. The approach is [herdr-sidebar](https://github.com/alexarthurs/herdr-sidebar)'s.
 
 - **Where it goes.** On `tab.created`, `tab.focused` and `workspace.focused`
   the hook docks the current tab if it has no dock yet: it splits the
@@ -69,8 +82,13 @@ patch. The approach is [herdr-sidebar](https://github.com/alexarthurs/herdr-side
   pane beside it through a temporary tab and splitting it back next to the pane
   above. `pane.move` keeps their processes; the layout around them does change.
   Your focus stays where it was.
-- **Size.** Five rows — three of usage inside the pane border. Drag the border
-  to resize it; a dock that is already there is never touched again.
+- **Size.** A row per window it shows, a title row, and the pane border. Drag
+  the border to resize it; a dock that is already there is only resized again
+  when the windows it shows change.
+- **Responsive.** Each agent is a column, and a column gives up detail as the
+  dock narrows or the agents multiply: the reset time first, then bar cells,
+  then the bar itself (`5h 97%`). When even the numbers do not fit, it shows
+  the agents that do and a `+N` for the rest.
 - **Show and hide** apply to every tab: `prefix+u` or `prefix+U`, or `✕` on
   the dock. Nothing else is bound, so `ctrl+u` still reaches your shell. Hidden
   means gone, not shrunk. Shown again, it comes back in the current tab and in
@@ -79,17 +97,46 @@ patch. The approach is [herdr-sidebar](https://github.com/alexarthurs/herdr-side
   which has no scrollback, and paints each frame over the last instead of
   clearing first. Numbers are fetched in the background into a cache every dock
   shares, so a dock per tab costs one fetch a minute.
+- **Never mistaken for an agent.** Herdr names a pane's agent from its
+  foreground process group, and fetching Codex usage means running
+  `codex app-server`. The dock starts it in a process group of its own, so the
+  dock never shows up in the agent list as a Codex session.
 - **Restarts.** Herdr restores panes without their command, so a restored dock
   is a shell that kept its label and the plugin's directory; the hook replaces
   it with a live one.
 
 The full popup is still there as the `herdr-pacer.open` action.
 
+### Settings
+
+`⚙` on the dock (or the `herdr-pacer.settings` action) opens a popup; click an
+option or move with the arrows and press space. Every change applies at once.
+
+```
+Usage dock
+  Agents    [x] Codex    [x] Claude   [x] OpenCode
+  Windows   [x] 5h       [x] Weekly   [ ] Monthly
+  Dots      ( ) 1 row    (•) 2 rows   ( ) 3 rows
+Agent sidebar
+  Show      [x] Context  [ ] 5h       [ ] Weekly
+  Layout    (•) a row each            ( ) one line
+  Dots      ( ) 1 row    (•) 2 rows   ( ) 3 rows
+```
+
+Dots are the bar's thickness — `⣀`, `⣤` or `⣶` — set apart for the dock and the
+sidebar. The sidebar's 5h and weekly bars are the account's, so a Claude session
+shows Claude's windows and a Codex session Codex's; they refresh on each agent
+turn, dock or no dock. The choices live in `settings.json` in the plugin's config
+directory (`herdr plugin config-dir herdr-pacer`); switching the layout rewrites
+the sidebar rows in `config.toml` and reloads Herdr.
+
 ## Install
 
-Needs `bash`, `jq`, `curl` and `python3`, plus Herdr itself; `sqlite3` only if
-you want OpenCode's context bar. Nothing else — herdr-pacer talks to each
-provider on its own.
+herdr-pacer is one Rust binary, built by Herdr from source on install and on
+update, so it needs a Rust toolchain (1.89 or newer; [rustup](https://rustup.rs))
+and Herdr 0.9 or newer. `sqlite3` only if you want OpenCode's context bar.
+Nothing else — herdr-pacer talks to Herdr over its socket and to each provider
+on its own.
 
 ```sh
 herdr plugin install amali01/herdr-pacer
@@ -100,39 +147,42 @@ herdr plugin action invoke herdr-pacer.setup
 inserts `" · "` between row tokens, straight through the middle of every bar, and
 the option that suppresses it is not upstream (checked through v0.9.1). Without
 the patch nothing breaks — the usage dock is plain plugin code and unaffected,
-and the sidebar bar just renders as `used · rail`. To build one, run `./herdr-build.sh` from the plugin
-directory (`herdr plugin list` prints it), install the binary it leaves in
-`target/release/herdr`, then invoke `setup` again.
+and the sidebar bar just renders as `used · rail`. To build one, run
+`./herdr-build.sh` from the plugin directory (`herdr plugin list` prints it),
+install the binary it leaves in `target/release/herdr`, then invoke `setup`
+again.
 
 Or work from a clone, which is also how you'd hack on it:
 
 ```sh
 git clone https://github.com/amali01/herdr-pacer.git
 cd herdr-pacer
+cargo build --release
 ./herdr-build.sh            # builds a patched herdr; prints how to install it
 herdr plugin link .
-./setup.sh
+target/release/herdr-pacer setup
 ```
 
-`setup.sh` is idempotent, backs up every file it touches, and:
+`setup` is idempotent, backs up every file it touches, and:
 
-1. wraps the Claude Code statusLine with `claude-statusline.sh`,
+1. wraps the Claude Code statusLine with `herdr-pacer statusline`,
 2. checks that the running Herdr understands `glue`,
-3. adds the context-bar row and the keybindings to `config.toml`, and
-4. reloads Herdr and docks usage in the current tab.
+3. adds the sidebar bar rows and the dock key to `config.toml`, and
+4. reloads Herdr and restarts the docks, so they run the new build.
 
 The wrapper is a pass-through: **whatever already drew your status line keeps
 drawing it**, and the wrapper only reads the context percentage out of the
 payload on its way past. If nothing was there before, it prints a minimal
-`ctx N%` line of its own. `./claude-hook.sh remove` puts the original command
-back.
+`ctx N%` line of its own. `herdr-pacer claude-hook remove` puts the original
+command back. An install from before the port — the shell scripts — is
+upgraded in place: `setup` rewraps the statusLine around the same inner command.
 
 ## Where the numbers come from
 
 | Reading | Source | Needs |
 |---|---|---|
 | Claude context | the statusLine payload (`context_window.used_percentage`) | the wrapper installed |
-| Codex context | the composer footer — `herdr pane read` picks up the `Context N% left` the TUI already prints | nothing |
+| Codex context | the composer footer — `pane.read` picks up the `Context N% left` the TUI already prints | nothing |
 | OpenCode context | its SQLite: the last turn's `tokens.total` for the session in that pane's directory, over the model's context limit from opencode's models cache | `sqlite3` |
 | Codex 5h / weekly | `codex app-server` → `account/rateLimits/read` | signed-in `codex` CLI |
 | Claude 5h / weekly | `api.anthropic.com/api/oauth/usage` — cc-pacer's cache is reused when it happens to be warm | signed-in Claude Code |
@@ -140,31 +190,37 @@ back.
 
 A startup sweep covers sessions that were already running when Herdr started.
 
-No credential file is written; the Claude bearer token reaches `curl` through
-stdin so it never shows up in the process table. The OpenCode database is opened
-read-only.
+No credential file is written, and the Claude bearer token never leaves the
+process: the request is made in-process, not by a command whose arguments
+anyone can list. The OpenCode database is opened read-only.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `collect.sh` | Provider collectors, the dotted-bar renderer, and the thresholds |
-| `claude-statusline.sh` | statusLine wrapper: passes the line through, reports the context window |
-| `claude-hook.sh` | `install` / `remove` / `status` for that wrapper |
-| `pacer-panes.sh` | Context bars for Codex and OpenCode: `sweep` / `pane` / `event` |
-| `usage.sh` | The dock (`usage.sh dock`) and the popup: 5h and weekly per agent |
-| `dock.py` | Keeps the dock along the bottom of every tab: `ensure` / `toggle` |
-| `sidebar-rows.toml` | The agent rows and colors `setup.sh` applies |
+| `src/main.rs` | The `herdr-pacer` subcommands |
+| `src/usage.rs` | Provider collectors, the shared cache, the dotted bar, the thresholds |
+| `src/tui.rs` | The dock (`herdr-pacer dock`) and the popup (`herdr-pacer popup`) |
+| `src/dock.rs` | Keeps the dock along the bottom of every tab: `ensure` / `toggle` |
+| `src/context.rs` | Sidebar bars and their `config.toml` rows; the `statusline` wrapper, `claude-hook`, `panes` for Codex and OpenCode |
+| `src/settings.rs` | What the dock and the sidebar show, as `settings.json` |
+| `src/panel.rs` | The settings popup (`herdr-pacer settings`) |
+| `src/setup.rs` | One-command setup |
+| `src/herdr.rs` | Herdr's socket API |
 | `herdr-glue.patch` | The Herdr change the bars need |
 | `herdr-build.sh` | Clones Herdr, applies the patch, builds it |
-| `herdr-plugin.toml` | Plugin manifest: hooks, actions, the popup and dock panes |
-| `setup.sh` | One-command setup |
+| `herdr-plugin.toml` | Plugin manifest: build, hooks, actions, the popup, settings and dock panes |
+
+`cargo test` covers the bar and its thickness, the thresholds, reset-time
+parsing, the Codex limits, the dock's layout math and how its strip narrows,
+the sidebar tokens and rows in both layouts, the settings file and popup, the
+statusLine quoting, and the `config.toml` migration.
 
 ## Knobs
 
 | Env var | Default | Meaning |
 |---|---|---|
-| `HERDR_PACER_CTX_CELLS` | `10` | Width of the sidebar context bar, in cells |
+| `HERDR_PACER_CTX_CELLS` | `10` | Width of a sidebar bar, in cells, when each metric has its own row |
 | `HERDR_PACER_BAR_CELLS` | `20` | Width of the bars in the popup (docks fit theirs to the pane) |
 | `HERDR_PACER_CTX_TTL_MS` | `300000` status line, 6h sweeps | How long a session's bar outlives its last refresh |
 | `HERDR_PACER_EVENT_SETTLE` | `1.5` | Seconds to let a TUI repaint before reading it |
