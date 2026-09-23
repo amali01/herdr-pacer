@@ -246,13 +246,27 @@ fn wrapped_inner(command: &str) -> Option<String> {
     }
 }
 
-fn backup(path: &std::path::Path) -> Option<PathBuf> {
-    let stamp = usage::now();
-    let copy = path.with_extension(format!("json.bak-{stamp}"));
-    std::fs::copy(path, &copy).ok().map(|_| copy)
+/// A timestamped copy next to `path`, keeping only the newest three.
+pub fn backup(path: &std::path::Path) -> Option<PathBuf> {
+    let name = path.file_name()?.to_string_lossy().into_owned();
+    let copy = path.with_file_name(format!("{name}.bak-{}", usage::now()));
+    std::fs::copy(path, &copy).ok()?;
+    let dir = path.parent()?;
+    let mut old: Vec<PathBuf> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.file_name().is_some_and(|f| f.to_string_lossy().starts_with(&format!("{name}.bak-"))))
+        .collect();
+    // by age, not name: older builds named their backups differently
+    old.sort_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
+    for stale in old.iter().rev().skip(3) {
+        let _ = std::fs::remove_file(stale);
+    }
+    Some(copy)
 }
 
-/// install | remove | status of the statusLine wrapper in Claude's settings.
+/// install | remove | status | refresh of the statusLine wrapper in Claude's
+/// settings. `refresh` rewraps only a statusLine already wrapped, by any build.
 pub fn claude_hook(action: &str) -> Result<String, String> {
     let path = settings_path();
     if let Some(dir) = path.parent() {
@@ -276,7 +290,8 @@ pub fn claude_hook(action: &str) -> Result<String, String> {
             Some(i) => format!("installed; inner command: {}", show(i)),
             None => format!("not installed; current command: {}", show(&current)),
         }),
-        "install" => {
+        "refresh" if inner.is_none() => Ok("not installed; nothing to refresh".into()),
+        "install" | "refresh" => {
             let inner_cmd = inner.clone().unwrap_or(current.clone());
             let command = format!("HERDR_PACER_STATUSLINE={} {ours}", quote(&inner_cmd));
             if command == current {
@@ -308,7 +323,7 @@ pub fn claude_hook(action: &str) -> Result<String, String> {
                 show(&inner)
             ))
         }
-        _ => Err("usage: herdr-pacer claude-hook install | remove | status".into()),
+        _ => Err("usage: herdr-pacer claude-hook install | remove | status | refresh".into()),
     }
 }
 

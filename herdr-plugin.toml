@@ -1,13 +1,14 @@
 id = "herdr-pacer"
 name = "Herdr Pacer"
-version = "0.7.0"
+version = "0.7.1"
 min_herdr_version = "0.9.0"
 description = "Context-window bars in the agent sidebar rows for Claude, Codex and OpenCode, plus the 5h and weekly windows in a dock along the bottom of every tab"
 platforms = ["linux", "macos"]
 
-# One binary does everything; Herdr builds it on install and on update.
+# One binary does everything; Herdr builds it on install and on update. A
+# failed build leaves the installed version in place.
 [[build]]
-command = ["cargo", "build", "--release"]
+command = ["sh", "-c", "command -v cargo > /dev/null || { echo 'herdr-pacer is built from source and needs Rust 1.89 or newer: https://rustup.rs' >&2; exit 1; }; exec cargo build --release"]
 
 # Codex and OpenCode cannot report their own context, so Herdr pokes us when an
 # agent's status changes — which is exactly when a turn has just ended.
@@ -43,6 +44,11 @@ command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" e
 id = "setup"
 title = "Set up herdr-pacer (statusLine wrapper, sidebar row, dock key)"
 command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" setup"]
+
+[[actions]]
+id = "update"
+title = "Update herdr-pacer (installs the published version only if it is newer)"
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" update"]
 
 [[actions]]
 id = "dock-toggle"
