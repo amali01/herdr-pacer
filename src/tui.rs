@@ -103,7 +103,7 @@ fn shown(rows: &[Row], s: &Settings) -> Vec<Agent> {
 
 /// One window of one column, in `content` cells: bar, percentage and reset
 /// time while they fit, then less.
-fn cell(line: &mut Line, label: &str, r: &Row, content: usize, dots: u8) {
+fn cell(line: &mut Line, label: &str, r: &Row, content: usize, s: &Settings) {
     let with_reset = content >= 6 + 17;
     let cells = match content {
         c if with_reset => (c - 17).min(20),
@@ -112,7 +112,7 @@ fn cell(line: &mut Line, label: &str, r: &Row, content: usize, dots: u8) {
     };
     line.push(SUBTLE, label).push("", " ");
     if cells > 0 {
-        let (used, rail) = usage::bar(r.pct, cells, dots);
+        let (used, rail) = usage::bar(r.pct, cells, s.dock_style, s.dock_size);
         line.push(color(r.pct), &used).push(RAIL, &rail).push("", " ");
     }
     line.push(color(r.pct), &format!("{:>3}%", r.pct));
@@ -148,7 +148,7 @@ fn strip(rows: &[Row], cols: usize, s: &Settings) -> Vec<String> {
             let line = &mut lines[i + 1];
             let edge = line.width + width;
             match (a.windows()[w], &a.error) {
-                (Some(r), _) => cell(line, WINDOW_LABELS[w], r, content, s.dock_dots),
+                (Some(r), _) => cell(line, WINDOW_LABELS[w], r, content, s),
                 (None, Some(e)) if i == 0 => drop(line.push(DIM, &truncate(e, content))),
                 _ => {}
             }
@@ -192,7 +192,7 @@ fn full(rows: &[Row], s: &Settings) -> Vec<String> {
         out.push(head.text);
         for (w, label) in ["5h", "weekly", "monthly"].into_iter().enumerate() {
             let Some(r) = a.windows()[w].as_ref().filter(|_| s.windows[w]) else { continue };
-            let (used, rail) = usage::bar(r.pct, cells, s.dock_dots);
+            let (used, rail) = usage::bar(r.pct, cells, s.dock_style, s.dock_size);
             let mut l = Line::default();
             l.push(SUBTLE, &format!("    {label:<7} "))
                 .push(color(r.pct), &used)
@@ -373,7 +373,7 @@ mod tests {
     #[test]
     fn strip_gives_up_detail_as_it_narrows() {
         let rows = [row("openai-codex", "5h", 97), row("claude", "5h", 5), row("opencode-go", "5h", 50)];
-        let s = Settings { windows: [true, false, false], dock_dots: 3, ..Settings::default() };
+        let s = Settings { windows: [true, false, false], dock_size: 3, ..Settings::default() };
         let wide = strip_text(&rows, 150, &s);
         assert!(wide[1].contains("⣶") && wide[1].contains(" 97%"));
         let narrow = strip_text(&rows, 50, &s);

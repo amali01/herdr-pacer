@@ -2,6 +2,7 @@
 //! edits it.
 //! Stored as settings.json in the plugin's config directory.
 
+use crate::usage::Style;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::PathBuf;
@@ -14,19 +15,23 @@ pub const METRICS: [(&str, &str, &str); 3] = [("context", "ctx", "ctx"), ("5h", 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
     pub hidden: bool,
-    /// Dock: agents and windows shown, and bar thickness in dot rows (1–3).
+    /// Dock: agents and windows shown, and how its bars are drawn — a style
+    /// and its size (1–3; see `Style`).
     pub agents: [bool; 3],
     pub windows: [bool; 3],
-    pub dock_dots: u8,
+    pub dock_style: Style,
+    pub dock_size: u8,
     /// Sidebar: metrics shown under each agent, one row each or all on one.
     pub metrics: [bool; 3],
     pub one_line: bool,
-    pub sidebar_dots: u8,
+    pub sidebar_style: Style,
+    pub sidebar_size: u8,
     /// Tab bar: agents with a segment (none: the view is off), windows shown,
-    /// and dot rows, 0 for the numbers alone.
+    /// and a style, None for the numbers alone.
     pub tab_agents: [bool; 3],
     pub tab_windows: [bool; 3],
-    pub tab_dots: u8,
+    pub tab_style: Option<Style>,
+    pub tab_size: u8,
 }
 
 impl Default for Settings {
@@ -35,13 +40,16 @@ impl Default for Settings {
             hidden: false,
             agents: [true; 3],
             windows: [true, true, false],
-            dock_dots: 2,
+            dock_style: Style::Dots,
+            dock_size: 2,
             metrics: [true, false, false],
             one_line: false,
-            sidebar_dots: 2,
+            sidebar_style: Style::Dots,
+            sidebar_size: 2,
             tab_agents: [false; 3],
             tab_windows: [true, true, false],
-            tab_dots: 2,
+            tab_style: Some(Style::Dots),
+            tab_size: 2,
         }
     }
 }
@@ -68,8 +76,13 @@ fn flags<const N: usize>(v: &Value, keys: [&str; N], default: [bool; N]) -> [boo
     out
 }
 
-fn dots(v: &Value, default: u8) -> u8 {
-    v.as_u64().map_or(default, |d| d.clamp(1, 3) as u8)
+/// A section's size; saved as "size", or "dots" by 0.8 and before.
+fn size(v: &Value, default: u8) -> u8 {
+    v["size"].as_u64().or(v["dots"].as_u64()).map_or(default, |d| d.clamp(1, 3) as u8)
+}
+
+fn style(v: &Value, default: Style) -> Style {
+    v["style"].as_str().and_then(Style::from_name).unwrap_or(default)
 }
 
 pub fn load() -> Settings {
@@ -84,13 +97,20 @@ pub fn load() -> Settings {
         hidden: v["hidden"].as_bool().unwrap_or(false),
         agents: flags(&v["dock"]["agents"], AGENTS.map(|a| a.0), d.agents),
         windows: flags(&v["dock"]["windows"], WINDOWS.map(|w| w.0), d.windows),
-        dock_dots: dots(&v["dock"]["dots"], d.dock_dots),
+        dock_style: style(&v["dock"], d.dock_style),
+        dock_size: size(&v["dock"], d.dock_size),
         metrics: flags(&v["sidebar"]["show"], METRICS.map(|m| m.0), d.metrics),
         one_line: v["sidebar"]["layout"] == "line",
-        sidebar_dots: dots(&v["sidebar"]["dots"], d.sidebar_dots),
+        sidebar_style: style(&v["sidebar"], d.sidebar_style),
+        sidebar_size: size(&v["sidebar"], d.sidebar_size),
         tab_agents: flags(&v["tabbar"]["agents"], AGENTS.map(|a| a.0), d.tab_agents),
         tab_windows: flags(&v["tabbar"]["windows"], WINDOWS.map(|w| w.0), d.tab_windows),
-        tab_dots: v["tabbar"]["dots"].as_u64().map_or(d.tab_dots, |n| n.min(3) as u8),
+        // 0.8 saved the numbers alone as zero dots
+        tab_style: match (v["tabbar"]["style"].as_str(), v["tabbar"]["dots"].as_u64()) {
+            (Some("numbers"), _) | (None, Some(0)) => None,
+            _ => Some(style(&v["tabbar"], Style::Dots)),
+        },
+        tab_size: size(&v["tabbar"], d.tab_size),
     }
 }
 
@@ -104,17 +124,20 @@ pub fn save(s: &Settings) {
         "dock": {
             "agents": object(AGENTS.map(|a| a.0), s.agents),
             "windows": object(WINDOWS.map(|w| w.0), s.windows),
-            "dots": s.dock_dots,
+            "style": s.dock_style.name(),
+            "size": s.dock_size,
         },
         "sidebar": {
             "show": object(METRICS.map(|m| m.0), s.metrics),
             "layout": if s.one_line { "line" } else { "rows" },
-            "dots": s.sidebar_dots,
+            "style": s.sidebar_style.name(),
+            "size": s.sidebar_size,
         },
         "tabbar": {
             "agents": object(AGENTS.map(|a| a.0), s.tab_agents),
             "windows": object(WINDOWS.map(|w| w.0), s.tab_windows),
-            "dots": s.tab_dots,
+            "style": s.tab_style.map_or("numbers", Style::name),
+            "size": s.tab_size,
         },
     });
     let _ = fs::create_dir_all(dir());
@@ -143,17 +166,23 @@ mod tests {
         assert!(load().hidden, "an older dock.json carries over");
         let s = Settings {
             agents: [false, true, true],
-            dock_dots: 3,
+            dock_style: Style::Blocks,
+            dock_size: 3,
             metrics: [true, true, false],
             one_line: true,
+            sidebar_style: Style::Slants,
             tab_agents: [true, false, true],
-            tab_dots: 0,
+            tab_style: None,
             ..load()
         };
         save(&s);
         assert_eq!(load(), s);
         fs::write(path(), r#"{"dock": {"dots": 9}}"#).unwrap();
-        assert_eq!((load().dock_dots, load().windows), (3, Settings::default().windows));
+        assert_eq!((load().dock_size, load().windows), (3, Settings::default().windows));
+        // what 0.8 saved: sizes as "dots", the tab bar's numbers as zero dots
+        fs::write(path(), r#"{"sidebar": {"dots": 1}, "tabbar": {"dots": 0}}"#).unwrap();
+        let old = load();
+        assert_eq!((old.sidebar_style, old.sidebar_size, old.tab_style), (Style::Dots, 1, None));
         let _ = fs::remove_dir_all(&dir);
     }
 }

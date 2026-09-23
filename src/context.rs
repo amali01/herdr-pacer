@@ -55,7 +55,7 @@ fn tokens(m: usize, pct: Option<u32>, s: &Settings) -> Map<String, Value> {
         if cells == 0 { format!("{lead}{head}") } else { format!("{lead}{head} {used}") }
     };
     let mut map = Map::new();
-    let bar = pct.map(|p| usage::bar(p, cells, s.sidebar_dots));
+    let bar = pct.map(|p| usage::bar(p, cells, s.sidebar_style, s.sidebar_size));
     for (b, _) in BUCKETS {
         let mine = pct.is_some_and(|p| usage::bucket(p) == b);
         let value = match (&bar, mine) {
@@ -438,7 +438,7 @@ mod tests {
         assert_eq!(t["pacer_ctx"], "⣀⣀⣀");
         assert!(t["pacer_ctx_ok"].is_null() && t["pacer_ctx_crit"].is_null());
         assert!(tokens(0, None, &s).values().all(Value::is_null));
-        let rows = Settings { metrics: [true; 3], sidebar_dots: 3, ..s.clone() };
+        let rows = Settings { metrics: [true; 3], sidebar_size: 3, ..s.clone() };
         assert_eq!(tokens(1, Some(100), &rows)["pacer_5h_crit"], "5h  100% ⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶");
         assert!(tokens(1, Some(100), &rows)["pacer_5h"].is_null(), "no rail left at 100%");
         let line = Settings { one_line: true, ..rows.clone() };
