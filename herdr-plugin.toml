@@ -1,6 +1,6 @@
 id = "herdr-pacer"
 name = "Herdr Pacer"
-version = "0.7.1"
+version = "0.7.2"
 min_herdr_version = "0.9.0"
 description = "Context-window bars in the agent sidebar rows for Claude, Codex and OpenCode, plus the 5h and weekly windows in a dock along the bottom of every tab"
 platforms = ["linux", "macos"]
