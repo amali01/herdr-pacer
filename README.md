@@ -7,7 +7,7 @@
   <a href="https://github.com/amali01/herdr-pacer/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/amali01/herdr-pacer?style=flat-square&labelColor=15181d&color=4a9eff"></a>
 </p>
 
-Pacing for the agents [Herdr](https://herdr.dev) runs, in two places:
+Pacing for the agents [Herdr](https://herdr.dev) runs, in three places:
 
 - **Per session** — dotted bars under each agent row in the sidebar: that
   session's context window, and if you like the **5h** and **weekly** windows
@@ -18,6 +18,8 @@ Pacing for the agents [Herdr](https://herdr.dev) runs, in two places:
   OpenCode, same bars, same colors. The prefix key then `u` or `U`
   (`ctrl+b u`) shows or hides it; its `⚙`, `⟳` and `✕` buttons open the
   settings, refresh, and hide it with the mouse.
+- **In the tab bar**, if you turn it on — a segment per agent at the right of
+  Herdr's tab bar: `Claude 5h ⣤⣤⣤⣤⣤⣤ 98% · wk ⣤⣤⣀⣀⣀⣀ 34%`.
 
 <p align="center">
   <img src="assets/demo.svg" width="960"
@@ -107,6 +109,24 @@ calls — no patch. The approach is [herdr-sidebar](https://github.com/alexarthu
 
 The full popup is still there as the `herdr-pacer.open` action.
 
+### The tab bar
+
+Off until you pick agents for it in the settings. Each agent then gets a
+`[ui] tab_bar_right` command in `config.toml` — Herdr's own way to put text in
+the tab bar — which it runs every 30 seconds and shows the last line of. The
+inspiration is [herdr-status-ui-bar](https://github.com/speardragon/herdr-status-ui-bar);
+the segments are drawn by the same binary from the same cache as the dock.
+
+- **Plain text.** Herdr strips color from the tab bar, so the dots carry how
+  full a window is; `numbers` drops them for `Claude 5h 98% · wk 34%`.
+- **Your own entries stay.** A zoom indicator, a clock or another plugin's
+  widget in `tab_bar_right` keeps its place; herdr-pacer's go last, and all of
+  them come out again when no agent is on.
+- **Changes show at once.** A settings change reloads Herdr's config, which
+  runs the commands right away rather than at their next interval.
+- **Never waits.** A segment prints from the cache; when that is stale it
+  starts a fetch in the background and shows the numbers it has.
+
 ### Settings
 
 `⚙` on the dock (or the `herdr-pacer.settings` action) opens a popup; click an
@@ -121,10 +141,14 @@ Agent sidebar
   Show      [x] Context  [ ] 5h       [ ] Weekly
   Layout    (•) a row each            ( ) one line
   Dots      ( ) 1 row    (•) 2 rows   ( ) 3 rows
+Tab bar
+  Show      [ ] Codex    [ ] Claude   [ ] OpenCode
+  Windows   [x] 5h       [x] Weekly   [ ] Monthly
+  Bar       ( ) numbers  ( ) 1 row    (•) 2 rows   ( ) 3 rows
 ```
 
-Dots are the bar's thickness — `⣀`, `⣤` or `⣶` — set apart for the dock and the
-sidebar. The sidebar's 5h and weekly bars are the account's, so a Claude session
+Dots are the bar's thickness — `⣀`, `⣤` or `⣶` — set apart for the dock, the
+sidebar and the tab bar. The sidebar's 5h and weekly bars are the account's, so a Claude session
 shows Claude's windows and a Codex session Codex's; they refresh on each agent
 turn, dock or no dock. The choices live in `settings.json` in the plugin's config
 directory (`herdr plugin config-dir herdr-pacer`); switching the layout rewrites
@@ -223,6 +247,7 @@ anyone can list. The OpenCode database is opened read-only.
 | `src/context.rs` | Sidebar bars and their `config.toml` rows; the `statusline` wrapper, `claude-hook`, `panes` for Codex and OpenCode |
 | `src/settings.rs` | What the dock and the sidebar show, as `settings.json` |
 | `src/panel.rs` | The settings popup (`herdr-pacer settings`) |
+| `src/tabbar.rs` | The tab bar segments (`herdr-pacer tabbar <agent>`) |
 | `src/setup.rs` | One-command setup |
 | `src/upgrade.rs` | `update` (installs only a newer version) and the once-per-version migration |
 | `claude-statusline.sh` | A shim for statusLines wrapped by the shell-script versions |

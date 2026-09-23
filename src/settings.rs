@@ -1,4 +1,5 @@
-//! What the dock and the sidebar show, as the settings popup edits it.
+//! What the dock, the sidebar and the tab bar show, as the settings popup
+//! edits it.
 //! Stored as settings.json in the plugin's config directory.
 
 use serde_json::{json, Value};
@@ -21,6 +22,11 @@ pub struct Settings {
     pub metrics: [bool; 3],
     pub one_line: bool,
     pub sidebar_dots: u8,
+    /// Tab bar: agents with a segment (none: the view is off), windows shown,
+    /// and dot rows, 0 for the numbers alone.
+    pub tab_agents: [bool; 3],
+    pub tab_windows: [bool; 3],
+    pub tab_dots: u8,
 }
 
 impl Default for Settings {
@@ -33,6 +39,9 @@ impl Default for Settings {
             metrics: [true, false, false],
             one_line: false,
             sidebar_dots: 2,
+            tab_agents: [false; 3],
+            tab_windows: [true, true, false],
+            tab_dots: 2,
         }
     }
 }
@@ -79,6 +88,9 @@ pub fn load() -> Settings {
         metrics: flags(&v["sidebar"]["show"], METRICS.map(|m| m.0), d.metrics),
         one_line: v["sidebar"]["layout"] == "line",
         sidebar_dots: dots(&v["sidebar"]["dots"], d.sidebar_dots),
+        tab_agents: flags(&v["tabbar"]["agents"], AGENTS.map(|a| a.0), d.tab_agents),
+        tab_windows: flags(&v["tabbar"]["windows"], WINDOWS.map(|w| w.0), d.tab_windows),
+        tab_dots: v["tabbar"]["dots"].as_u64().map_or(d.tab_dots, |n| n.min(3) as u8),
     }
 }
 
@@ -98,6 +110,11 @@ pub fn save(s: &Settings) {
             "show": object(METRICS.map(|m| m.0), s.metrics),
             "layout": if s.one_line { "line" } else { "rows" },
             "dots": s.sidebar_dots,
+        },
+        "tabbar": {
+            "agents": object(AGENTS.map(|a| a.0), s.tab_agents),
+            "windows": object(WINDOWS.map(|w| w.0), s.tab_windows),
+            "dots": s.tab_dots,
         },
     });
     let _ = fs::create_dir_all(dir());
@@ -124,7 +141,15 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("dock.json"), r#"{"hidden": true}"#).unwrap();
         assert!(load().hidden, "an older dock.json carries over");
-        let s = Settings { agents: [false, true, true], dock_dots: 3, metrics: [true, true, false], one_line: true, ..load() };
+        let s = Settings {
+            agents: [false, true, true],
+            dock_dots: 3,
+            metrics: [true, true, false],
+            one_line: true,
+            tab_agents: [true, false, true],
+            tab_dots: 0,
+            ..load()
+        };
         save(&s);
         assert_eq!(load(), s);
         fs::write(path(), r#"{"dock": {"dots": 9}}"#).unwrap();

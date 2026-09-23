@@ -1,6 +1,7 @@
 //! herdr-pacer — pacing for the agents Herdr runs: bars under each agent row
 //! in the sidebar (its context window, its account's 5h and weekly windows),
-//! and every agent's windows in a dock along the bottom of every tab.
+//! and every agent's windows in a dock along the bottom of every tab and in
+//! the tab bar.
 
 mod context;
 mod dock;
@@ -8,6 +9,7 @@ mod herdr;
 mod panel;
 mod settings;
 mod setup;
+mod tabbar;
 mod tui;
 mod upgrade;
 mod usage;
@@ -17,6 +19,7 @@ const USAGE: &str = "usage: herdr-pacer <command>
   dock                      the usage strip docked along the bottom of a tab
   popup                     the usage popup
   settings                  the settings popup (the dock's ⚙)
+  tabbar <agent>            an agent's tab bar segment ([ui] tab_bar_right runs it)
   ensure | toggle           dock the current tab (hooks) | show or hide every dock
   statusline                Claude Code statusLine wrapper (reads the payload on stdin)
   claude-hook install|remove|status
@@ -38,6 +41,7 @@ fn main() {
         Some("dock") => tui::run(true).unwrap_or_else(|e| fail(e.to_string())),
         Some("popup") => tui::run(false).unwrap_or_else(|e| fail(e.to_string())),
         Some("settings") => panel::run().unwrap_or_else(|e| fail(e.to_string())),
+        Some("tabbar") => tabbar::run(args.get(1).map_or("", String::as_str)),
         Some("ensure") => {
             upgrade::migrate(false);
             dock::run("ensure").unwrap_or_else(|e| fail(e.to_string()))
