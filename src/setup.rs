@@ -41,8 +41,12 @@ fn keys_of(item: &Item) -> Vec<String> {
 fn patch(doc: &mut DocumentMut) -> Vec<String> {
     let mut notes: Vec<String> = vec![];
 
-    // the bar rows under each agent
+    // the bar rows under each agent, and the tab bar commands
     notes.push(format!("sidebar bar rows: {}", put_rows(doc)));
+    let (on, exe) = tabbar_wanted();
+    if put_tabbar(doc, on, exe.as_deref()) {
+        notes.push("tab bar: updated".into());
+    }
 
     // the Space gauges and the wider sidebar an early version asked for
     let ui = table(doc, &["ui"]);
@@ -118,6 +122,50 @@ fn put_rows(doc: &mut DocumentMut) -> &'static str {
             verb
         }
     }
+}
+
+/// A tab bar command of ours, told apart from the user's own entries.
+fn is_ours(entry: &toml_edit::Value) -> bool {
+    entry.as_inline_table().and_then(|t| t.get("command")).and_then(|c| c.as_str()).is_some_and(|c| c.contains("herdr-pacer") && c.contains(" tabbar "))
+}
+
+/// `[ui] tab_bar_right`: a command per agent while any agent is on in the tab
+/// bar settings, none while all are off. Entries of the user's own (zoom, a
+/// clock, other widgets) stay as they are, in their order; ours go last.
+/// Whether anything changed.
+fn put_tabbar(doc: &mut DocumentMut, on: bool, exe: Option<&std::path::Path>) -> bool {
+    let ui = table(doc, &["ui"]);
+    let before = ui.get("tab_bar_right").map(|i| i.to_string());
+    let mut entries = ui.get("tab_bar_right").and_then(Item::as_array).cloned().unwrap_or_default();
+    entries.retain(|e| !is_ours(e));
+    if let (true, Some(exe)) = (on, exe) {
+        let bin = format!("'{}'", exe.to_string_lossy().replace('\'', r"'\''"));
+        for (key, _) in settings::AGENTS {
+            let mut entry = toml_edit::InlineTable::new();
+            entry.insert("type", "command".into());
+            entry.insert("command", format!("{bin} tabbar {key}").into());
+            entry.insert("interval_seconds", 30.into());
+            entry.insert("timeout_seconds", 3.into());
+            entries.push(entry);
+        }
+    }
+    if entries.is_empty() {
+        ui.remove("tab_bar_right");
+    } else {
+        ui.insert("tab_bar_right", value(entries));
+    }
+    ui.get("tab_bar_right").map(|i| i.to_string()) != before
+}
+
+fn tabbar_wanted() -> (bool, Option<PathBuf>) {
+    let on = settings::load().tab_agents.contains(&true);
+    (on, std::env::current_exe().ok().and_then(|p| p.canonicalize().ok()))
+}
+
+/// Adds or removes the tab bar commands after the tab bar settings change.
+pub fn apply_tabbar() -> Result<(), String> {
+    let (on, exe) = tabbar_wanted();
+    rewrite(|doc| put_tabbar(doc, on, exe.as_deref()))
 }
 
 /// Rewrites the sidebar rows after the layout changes, and reloads Herdr.
@@ -249,6 +297,23 @@ command = "lazygit"
         let notes = patch(&mut again);
         assert_eq!(again.to_string(), once);
         assert_eq!(notes, ["sidebar bar rows: unchanged", "dock key already bound"]);
+    }
+
+    #[test]
+    fn tab_bar_commands_come_and_go_beside_the_users_own() {
+        let mut doc: DocumentMut = "[ui]\ntab_bar_right = [{ type = \"zoom\" }, { type = \"datetime\" }]\n".parse().unwrap();
+        let exe = std::path::Path::new("/p/it's/herdr-pacer");
+        assert!(put_tabbar(&mut doc, true, Some(exe)));
+        let on = doc.to_string();
+        assert!(on.contains(r#"{ type = "zoom" }, { type = "datetime" }"#), "the user's own come first: {on}");
+        assert_eq!(on.matches(" tabbar ").count(), 3);
+        assert!(on.contains(r#"'/p/it'\''s/herdr-pacer' tabbar claude"#));
+        assert!(!put_tabbar(&mut doc, true, Some(exe)), "already there");
+        assert!(put_tabbar(&mut doc, false, Some(exe)));
+        assert_eq!(doc.to_string().matches("tabbar").count(), 0);
+        assert!(doc.to_string().contains("zoom"));
+        let mut empty: DocumentMut = "[ui]\n".parse().unwrap();
+        assert!(!put_tabbar(&mut empty, false, Some(exe)), "off, and nothing to remove");
     }
 
     #[test]
