@@ -122,10 +122,29 @@ fn put_rows(doc: &mut DocumentMut) -> &'static str {
 
 /// Rewrites the sidebar rows after the layout changes, and reloads Herdr.
 pub fn apply_rows() -> Result<(), String> {
+    rewrite(|doc| put_rows(doc) != "unchanged")
+}
+
+/// Brings an earlier setup's rows and dock key up to this build (upgrades).
+pub fn apply_config() -> Result<(), String> {
+    rewrite(|doc| {
+        let before = doc.to_string();
+        patch(doc);
+        doc.to_string() != before
+    })
+}
+
+/// Whether setup has run here before: config.toml carries our rows or key.
+pub fn configured() -> bool {
+    std::fs::read_to_string(config_path()).is_ok_and(|t| t.contains("$pacer_") || t.contains("herdr-pacer."))
+}
+
+fn rewrite(change: impl FnOnce(&mut DocumentMut) -> bool) -> Result<(), String> {
     let path = config_path();
     let text = std::fs::read_to_string(&path).unwrap_or_default();
     let mut doc: DocumentMut = text.parse().map_err(|e| format!("{}: {e}", path.display()))?;
-    if put_rows(&mut doc) != "unchanged" {
+    if change(&mut doc) {
+        context::backup(&path);
         std::fs::write(&path, doc.to_string()).map_err(|e| format!("{}: {e}", path.display()))?;
         herdr::call("server.reload_config", json!({})).map_err(|e| e.to_string())?;
     }
@@ -162,9 +181,7 @@ pub fn run() -> Result<(), String> {
     }
     let text = std::fs::read_to_string(&path).unwrap_or_else(|_| "# herdr configuration\n".into());
     let mut doc: DocumentMut = text.parse().map_err(|e| format!("{}: {e}", path.display()))?;
-    if path.exists() {
-        let copy = path.with_extension(format!("toml.bak-{}", crate::usage::now()));
-        std::fs::copy(&path, &copy).map_err(|e| e.to_string())?;
+    if let Some(copy) = path.exists().then(|| context::backup(&path)).flatten() {
         println!("    backup: {}", copy.display());
     }
     for note in patch(&mut doc) {
@@ -185,6 +202,7 @@ pub fn run() -> Result<(), String> {
         Err(_) => println!("    no running server (start herdr once; config applies then)"),
     }
 
+    let _ = std::fs::write(crate::usage::state_dir().join("version"), crate::upgrade::VERSION);
     println!();
     println!("done — context bars appear under each Claude session as its status line");
     println!("refreshes, and the 5h and weekly windows sit in a dock along the bottom of");

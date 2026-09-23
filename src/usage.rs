@@ -428,12 +428,17 @@ fn opencode_go() -> Vec<Row> {
 
 // ── the shared cache: whichever copy finds it stale fetches, the rest read ──
 
+/// Herdr's state directory for the plugin. Outside Herdr — the Claude
+/// statusLine runs under Claude, not Herdr — the same path is worked out,
+/// so every copy shares one cache.
 pub fn state_dir() -> PathBuf {
     let dir = std::env::var_os("HERDR_PACER_STATE_DIR")
         .or_else(|| std::env::var_os("HERDR_PLUGIN_STATE_DIR"))
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            std::env::var_os("XDG_STATE_HOME").map_or_else(|| home().join(".local/state"), PathBuf::from).join("herdr-pacer")
+            std::env::var_os("XDG_STATE_HOME")
+                .map_or_else(|| home().join(".local/state"), PathBuf::from)
+                .join("herdr/plugins/herdr-pacer")
         });
     let _ = fs::create_dir_all(&dir);
     dir
