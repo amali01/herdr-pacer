@@ -130,7 +130,7 @@ turn, dock or no dock. The choices live in `settings.json` in the plugin's confi
 directory (`herdr plugin config-dir herdr-pacer`); switching the layout rewrites
 the sidebar rows in `config.toml` and reloads Herdr.
 
-## Install
+## Install and update
 
 herdr-pacer is one Rust binary, built by Herdr from source on install and on
 update, so it needs a Rust toolchain (1.89 or newer; [rustup](https://rustup.rs))
@@ -142,6 +142,24 @@ on its own.
 herdr plugin install amali01/herdr-pacer
 herdr plugin action invoke herdr-pacer.setup
 ```
+
+**Updating.** From 0.7.1 on, `herdr plugin action invoke herdr-pacer.update`
+compares the installed version with the one on GitHub and installs it only when
+it is newer; the same or an older version is left alone. From any earlier
+version, run the install command again — Herdr replaces the checkout and
+rebuilds, and the old version keeps running if the build fails. Either way,
+the first hook the new build runs migrates the rest by itself, once: it rewraps
+the Claude statusLine, brings the sidebar rows and the dock key in
+`config.toml` up to date, carries old settings over, deletes state files older
+versions left, and restarts the docks. There is no need to run `setup` again.
+
+- Coming from a shell-script version (before 0.7), install a Rust toolchain
+  first; the build says so if it is missing. `claude-statusline.sh` stays as a
+  shim, so a statusLine wrapped by those versions keeps drawing until it is
+  rewrapped.
+- If you linked a checkout (`herdr plugin link`), Herdr will not install over
+  it: `herdr plugin unlink herdr-pacer` first, or pull and
+  `cargo build --release` in the checkout.
 
 **The sidebar bars need a Herdr built with `herdr-glue.patch`.** Stock Herdr
 inserts `" · "` between row tokens, straight through the middle of every bar, and
@@ -206,6 +224,8 @@ anyone can list. The OpenCode database is opened read-only.
 | `src/settings.rs` | What the dock and the sidebar show, as `settings.json` |
 | `src/panel.rs` | The settings popup (`herdr-pacer settings`) |
 | `src/setup.rs` | One-command setup |
+| `src/upgrade.rs` | `update` (installs only a newer version) and the once-per-version migration |
+| `claude-statusline.sh` | A shim for statusLines wrapped by the shell-script versions |
 | `src/herdr.rs` | Herdr's socket API |
 | `herdr-glue.patch` | The Herdr change the bars need |
 | `herdr-build.sh` | Clones Herdr, applies the patch, builds it |
