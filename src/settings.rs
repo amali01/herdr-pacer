@@ -15,6 +15,9 @@ pub const METRICS: [(&str, &str, &str); 3] = [("context", "ctx", "ctx"), ("5h", 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
     pub hidden: bool,
+    /// The agents in the order the dock, the popup and the tab bar list them,
+    /// as indexes into `AGENTS`.
+    pub order: [usize; 3],
     /// Dock: agents and windows shown, and how its bars are drawn — a style
     /// and its size (1–3; see `Style`).
     pub agents: [bool; 3],
@@ -38,6 +41,7 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             hidden: false,
+            order: [0, 1, 2],
             agents: [true; 3],
             windows: [true, true, false],
             dock_style: Style::Dots,
@@ -95,6 +99,7 @@ pub fn load() -> Settings {
     };
     Settings {
         hidden: v["hidden"].as_bool().unwrap_or(false),
+        order: order(&v["order"]),
         agents: flags(&v["dock"]["agents"], AGENTS.map(|a| a.0), d.agents),
         windows: flags(&v["dock"]["windows"], WINDOWS.map(|w| w.0), d.windows),
         dock_style: style(&v["dock"], d.dock_style),
@@ -114,6 +119,26 @@ pub fn load() -> Settings {
     }
 }
 
+/// Saved as agent keys; unknown or repeated keys are dropped and the missing
+/// agents follow in their default order.
+fn order(v: &Value) -> [usize; 3] {
+    let mut out: Vec<usize> = vec![];
+    for key in v.as_array().into_iter().flatten().filter_map(Value::as_str) {
+        if let Some(i) = AGENTS.iter().position(|a| a.0 == key).filter(|i| !out.contains(i)) {
+            out.push(i);
+        }
+    }
+    out.extend((0..AGENTS.len()).filter(|i| !out.contains(i)).collect::<Vec<_>>());
+    [out[0], out[1], out[2]]
+}
+
+impl Settings {
+    /// `AGENTS` in the chosen order.
+    pub fn agents_in_order(&self) -> [(&'static str, &'static str); 3] {
+        self.order.map(|i| AGENTS[i])
+    }
+}
+
 fn object<const N: usize>(keys: [&str; N], values: [bool; N]) -> Value {
     Value::Object(keys.iter().zip(values).map(|(k, v)| (k.to_string(), json!(v))).collect())
 }
@@ -121,6 +146,7 @@ fn object<const N: usize>(keys: [&str; N], values: [bool; N]) -> Value {
 pub fn save(s: &Settings) {
     let v = json!({
         "hidden": s.hidden,
+        "order": s.agents_in_order().map(|a| a.0),
         "dock": {
             "agents": object(AGENTS.map(|a| a.0), s.agents),
             "windows": object(WINDOWS.map(|w| w.0), s.windows),
@@ -165,6 +191,7 @@ mod tests {
         fs::write(dir.join("dock.json"), r#"{"hidden": true}"#).unwrap();
         assert!(load().hidden, "an older dock.json carries over");
         let s = Settings {
+            order: [1, 0, 2],
             agents: [false, true, true],
             dock_style: Style::Blocks,
             dock_size: 3,
@@ -183,6 +210,8 @@ mod tests {
         fs::write(path(), r#"{"sidebar": {"dots": 1}, "tabbar": {"dots": 0}}"#).unwrap();
         let old = load();
         assert_eq!((old.sidebar_style, old.sidebar_size, old.tab_style), (Style::Dots, 1, None));
+        fs::write(path(), r#"{"order": ["claude", "nope", "claude"]}"#).unwrap();
+        assert_eq!(load().order, [1, 0, 2], "unknown and repeated keys dropped, the rest follow");
         let _ = fs::remove_dir_all(&dir);
     }
 }

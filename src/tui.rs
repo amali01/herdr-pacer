@@ -95,10 +95,13 @@ fn hide_x(cols: usize) -> usize {
 const WINDOW_LABELS: [&str; 3] = ["5h", "wk", "mo"];
 
 fn shown(rows: &[Row], s: &Settings) -> Vec<Agent> {
-    usage::agents(rows)
+    let order = s.agents_in_order();
+    let mut agents: Vec<Agent> = usage::agents(rows)
         .into_iter()
         .filter(|a| AGENTS.iter().position(|(k, _)| *k == a.key).is_none_or(|i| s.agents[i]))
-        .collect()
+        .collect();
+    agents.sort_by_key(|a| order.iter().position(|(k, _)| *k == a.key));
+    agents
 }
 
 /// One window of one column, in `content` cells: bar, percentage and reset
@@ -381,6 +384,8 @@ mod tests {
         assert!(narrow[1].contains("5h  97%") && narrow[1].contains("5h  50%"));
         let tiny = strip_text(&rows, 30, &s);
         assert!(tiny[0].contains("+1"), "the rest are counted: {:?}", tiny[0]);
+        let claude_first = Settings { order: [1, 0, 2], ..s.clone() };
+        assert!(strip_text(&rows, 150, &claude_first)[0].starts_with("Claude"));
         let only_claude = Settings { agents: [false, true, false], ..s };
         assert!(!strip_text(&rows, 150, &only_claude)[0].contains("Codex"));
     }

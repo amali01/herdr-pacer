@@ -131,6 +131,8 @@ the segments are drawn by the same binary from the same cache as the dock.
 
 `⚙` on the dock (or the `herdr-pacer.settings` action) opens a popup; click an
 option or move with the arrows and press space. Every change applies at once.
+The agents are listed in the order the dock, the popup and the tab bar show
+them; `<` and `>` (or shift ←→) move the focused agent along.
 
 ```
 Usage dock

@@ -43,8 +43,8 @@ fn patch(doc: &mut DocumentMut) -> Vec<String> {
 
     // the bar rows under each agent, and the tab bar commands
     notes.push(format!("sidebar bar rows: {}", put_rows(doc)));
-    let (on, exe) = tabbar_wanted();
-    if put_tabbar(doc, on, exe.as_deref()) {
+    let (keys, exe) = tabbar_wanted();
+    if put_tabbar(doc, &keys, exe.as_deref()) {
         notes.push("tab bar: updated".into());
     }
 
@@ -129,18 +129,18 @@ fn is_ours(entry: &toml_edit::Value) -> bool {
     entry.as_inline_table().and_then(|t| t.get("command")).and_then(|c| c.as_str()).is_some_and(|c| c.contains("herdr-pacer") && c.contains(" tabbar "))
 }
 
-/// `[ui] tab_bar_right`: a command per agent while any agent is on in the tab
-/// bar settings, none while all are off. Entries of the user's own (zoom, a
+/// `[ui] tab_bar_right`: a command per agent in `keys`, in the chosen order,
+/// while any agent is on in the tab bar settings, none while all are off. Entries of the user's own (zoom, a
 /// clock, other widgets) stay as they are, in their order; ours go last.
 /// Whether anything changed.
-fn put_tabbar(doc: &mut DocumentMut, on: bool, exe: Option<&std::path::Path>) -> bool {
+fn put_tabbar(doc: &mut DocumentMut, keys: &[&str], exe: Option<&std::path::Path>) -> bool {
     let ui = table(doc, &["ui"]);
     let before = ui.get("tab_bar_right").map(|i| i.to_string());
     let mut entries = ui.get("tab_bar_right").and_then(Item::as_array).cloned().unwrap_or_default();
     entries.retain(|e| !is_ours(e));
-    if let (true, Some(exe)) = (on, exe) {
+    if let Some(exe) = exe.filter(|_| !keys.is_empty()) {
         let bin = format!("'{}'", exe.to_string_lossy().replace('\'', r"'\''"));
-        for (key, _) in settings::AGENTS {
+        for key in keys {
             let mut entry = toml_edit::InlineTable::new();
             entry.insert("type", "command".into());
             entry.insert("command", format!("{bin} tabbar {key}").into());
@@ -157,15 +157,21 @@ fn put_tabbar(doc: &mut DocumentMut, on: bool, exe: Option<&std::path::Path>) ->
     ui.get("tab_bar_right").map(|i| i.to_string()) != before
 }
 
-fn tabbar_wanted() -> (bool, Option<PathBuf>) {
-    let on = settings::load().tab_agents.contains(&true);
-    (on, std::env::current_exe().ok().and_then(|p| p.canonicalize().ok()))
+/// The agent keys for the tab bar commands, in order; none while the tab bar
+/// view is off.
+fn tabbar_wanted() -> (Vec<&'static str>, Option<PathBuf>) {
+    let s = settings::load();
+    let keys = match s.tab_agents.contains(&true) {
+        true => s.agents_in_order().map(|a| a.0).to_vec(),
+        false => vec![],
+    };
+    (keys, std::env::current_exe().ok().and_then(|p| p.canonicalize().ok()))
 }
 
 /// Adds or removes the tab bar commands after the tab bar settings change.
 pub fn apply_tabbar() -> Result<(), String> {
-    let (on, exe) = tabbar_wanted();
-    rewrite(|doc| put_tabbar(doc, on, exe.as_deref()))
+    let (keys, exe) = tabbar_wanted();
+    rewrite(|doc| put_tabbar(doc, &keys, exe.as_deref()))
 }
 
 /// Rewrites the sidebar rows after the layout changes, and reloads Herdr.
@@ -303,17 +309,20 @@ command = "lazygit"
     fn tab_bar_commands_come_and_go_beside_the_users_own() {
         let mut doc: DocumentMut = "[ui]\ntab_bar_right = [{ type = \"zoom\" }, { type = \"datetime\" }]\n".parse().unwrap();
         let exe = std::path::Path::new("/p/it's/herdr-pacer");
-        assert!(put_tabbar(&mut doc, true, Some(exe)));
+        let keys = ["claude", "openai-codex", "opencode-go"];
+        assert!(put_tabbar(&mut doc, &keys, Some(exe)));
         let on = doc.to_string();
         assert!(on.contains(r#"{ type = "zoom" }, { type = "datetime" }"#), "the user's own come first: {on}");
         assert_eq!(on.matches(" tabbar ").count(), 3);
         assert!(on.contains(r#"'/p/it'\''s/herdr-pacer' tabbar claude"#));
-        assert!(!put_tabbar(&mut doc, true, Some(exe)), "already there");
-        assert!(put_tabbar(&mut doc, false, Some(exe)));
+        assert!(on.find("tabbar claude") < on.find("tabbar openai-codex"), "in the chosen order");
+        assert!(!put_tabbar(&mut doc, &keys, Some(exe)), "already there");
+        assert!(put_tabbar(&mut doc, &[keys[1], keys[0], keys[2]], Some(exe)), "reordered");
+        assert!(put_tabbar(&mut doc, &[], Some(exe)));
         assert_eq!(doc.to_string().matches("tabbar").count(), 0);
         assert!(doc.to_string().contains("zoom"));
         let mut empty: DocumentMut = "[ui]\n".parse().unwrap();
-        assert!(!put_tabbar(&mut empty, false, Some(exe)), "off, and nothing to remove");
+        assert!(!put_tabbar(&mut empty, &[], Some(exe)), "off, and nothing to remove");
     }
 
     #[test]

@@ -12,8 +12,11 @@
 //! thickness for Bar, shade for Blocks — and a preview beside it draws the
 //! bar as it will look. Slants come in one size, and so does "numbers" in the
 //! tab bar, which has no bar at all.
+//!
+//! The agents are listed in the order the dock, the popup and the tab bar show
+//! them; `<` and `>` (or shift ←→) move the focused one.
 
-use crate::settings::{self, Settings};
+use crate::settings::{self, Settings, AGENTS};
 use crate::usage::{self, Style};
 use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 use crossterm::{cursor, execute, terminal};
@@ -84,8 +87,9 @@ fn items(s: &Settings) -> Vec<Item> {
     // the same columns as the other style rows, and the numbers alone last
     let mut tab_styles = style_options(|st| Setting::TabStyle(Some(st)));
     tab_styles.push((Setting::TabStyle(None), "numbers"));
+    let agents = |to: fn(usize) -> Setting| s.order.iter().map(|&i| (to(i), AGENTS[i].1)).collect();
     vec![
-        plain("Agents", vec![(Setting::Agent(0), "Codex"), (Setting::Agent(1), "Claude"), (Setting::Agent(2), "OpenCode")]),
+        plain("Agents", agents(Setting::Agent)),
         plain("Windows", vec![(Setting::Window(0), "5h"), (Setting::Window(1), "Weekly"), (Setting::Window(2), "Monthly")]),
         Item { label: "Style", kind: Kind::Styles, options: style_options(Setting::DockStyle) },
         size_item(Some(s.dock_style), s.dock_size, Setting::DockSize),
@@ -93,7 +97,7 @@ fn items(s: &Settings) -> Vec<Item> {
         plain("Layout", vec![(Setting::OneLine(false), "a row each"), (Setting::OneLine(true), "one line")]),
         Item { label: "Style", kind: Kind::Styles, options: style_options(Setting::SidebarStyle) },
         size_item(Some(s.sidebar_style), s.sidebar_size, Setting::SidebarSize),
-        plain("Show", vec![(Setting::TabAgent(0), "Codex"), (Setting::TabAgent(1), "Claude"), (Setting::TabAgent(2), "OpenCode")]),
+        plain("Show", agents(Setting::TabAgent)),
         plain("Windows", vec![(Setting::TabWindow(0), "5h"), (Setting::TabWindow(1), "Weekly"), (Setting::TabWindow(2), "Monthly")]),
         Item { label: "Style", kind: Kind::Styles, options: tab_styles },
         size_item(s.tab_style, s.tab_size, Setting::TabSize),
@@ -146,6 +150,17 @@ fn apply(s: &Settings, what: Setting) -> Settings {
     s
 }
 
+/// Moves an agent `step` places along the order: the new settings and the
+/// place it lands on, or None for anything but an agent or at either end.
+fn reorder(s: &Settings, what: Setting, step: isize) -> Option<(Settings, usize)> {
+    let (Setting::Agent(i) | Setting::TabAgent(i)) = what else { return None };
+    let from = s.order.iter().position(|&o| o == i)?;
+    let to = from.checked_add_signed(step).filter(|&to| to < s.order.len())?;
+    let mut s = s.clone();
+    s.order.swap(from, to);
+    Some((s, to))
+}
+
 /// Saves, then brings the dock, the sidebar and the tab bar in line with what
 /// changed. The dock follows on its own: it watches the settings file.
 fn commit(before: &Settings, after: &Settings) {
@@ -164,9 +179,10 @@ fn commit(before: &Settings, after: &Settings) {
     // the tab bar settings as they run; a reload runs them at once rather
     // than at their next interval
     let tab = |s: &Settings| (s.tab_agents, s.tab_windows, s.tab_style, s.tab_size);
-    if before.tab_agents.contains(&true) != after.tab_agents.contains(&true) {
+    let on = |s: &Settings| s.tab_agents.contains(&true);
+    if on(before) != on(after) || (on(after) && before.order != after.order) {
         let _ = crate::setup::apply_tabbar();
-    } else if after.tab_agents.contains(&true) && tab(before) != tab(after) {
+    } else if on(after) && tab(before) != tab(after) {
         let _ = crate::herdr::call("server.reload_config", serde_json::json!({}));
     }
 }
@@ -213,7 +229,7 @@ fn render(s: &Settings, focus: (usize, usize)) -> String {
     for (row, heading) in HEADINGS {
         rows[row] = format!(" {SUBTLE}{heading}{RESET}");
     }
-    rows[FOOTER] = format!(" {DIM}↑↓ ←→ move · space picks · click · q closes{RESET}");
+    rows[FOOTER] = format!(" {DIM}↑↓ ←→ move · space picks · < > reorders agents · click · q closes{RESET}");
     for (i, item) in items.iter().enumerate() {
         let mut line = format!("   {:<10}", item.label);
         let mut width = 13;
@@ -266,6 +282,10 @@ fn run_loop() -> std::io::Result<()> {
         let choose = match event::read()? {
             Event::Key(k) => match k.code {
                 KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                KeyCode::Char(c @ ('<' | '>')) => move_agent(&mut s, &mut focus, &items, if c == '<' { -1 } else { 1 }),
+                KeyCode::Left | KeyCode::Right if k.modifiers.contains(KeyModifiers::SHIFT) => {
+                    move_agent(&mut s, &mut focus, &items, if k.code == KeyCode::Left { -1 } else { 1 })
+                }
                 KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
                 KeyCode::Up | KeyCode::Char('k') => {
                     focus.0 = focus.0.saturating_sub(1);
@@ -298,6 +318,17 @@ fn run_loop() -> std::io::Result<()> {
             s = next;
         }
     }
+}
+
+/// `<` and `>`: moves the focused agent, and the focus with it.
+fn move_agent(s: &mut Settings, focus: &mut (usize, usize), items: &[Item], step: isize) -> Option<(usize, usize)> {
+    let what = items[focus.0].options.get(focus.1)?.0;
+    if let Some((next, to)) = reorder(s, what, step) {
+        commit(s, &next);
+        *s = next;
+        focus.1 = to;
+    }
+    None
 }
 
 #[cfg(test)]
@@ -334,6 +365,16 @@ mod tests {
         assert!(apply(&s, Setting::TabAgent(2)).tab_agents[2]);
         assert_eq!(apply(&s, Setting::TabStyle(None)).tab_style, None);
         assert_eq!(apply(&s, Setting::Fixed), s);
+    }
+
+    #[test]
+    fn agents_move_along_the_order() {
+        let s = Settings::default();
+        let (claude_first, at) = reorder(&s, Setting::Agent(1), -1).unwrap();
+        assert_eq!((claude_first.order, at), ([1, 0, 2], 0));
+        assert_eq!(items(&claude_first)[0].options[0].1, "Claude", "listed in the order");
+        assert_eq!(reorder(&claude_first, Setting::TabAgent(2), 1), None, "already last");
+        assert_eq!(reorder(&s, Setting::Window(0), 1), None, "only agents move");
     }
 
     #[test]
