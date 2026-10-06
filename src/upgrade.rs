@@ -4,7 +4,9 @@
 //! ours afterwards, so the first hook to run a new build migrates whatever the
 //! last one left: the statusLine wrapper, the rows and key in config.toml,
 //! state files, and docks still running the old build. A stamp of the
-//! version it last migrated to makes that a one-time step.
+//! version it last migrated to makes that a one-time step. The stamp carries
+//! whether Herdr parses `glue` too, so after a Herdr update that changes the
+//! answer the next hook rewrites the rows and reloads the config.
 //!
 //! `update` is the version-aware install: it compares this build with the
 //! version published on GitHub and reinstalls only when that one is newer.
@@ -18,6 +20,11 @@ const REPO: &str = "amali01/herdr-pacer";
 
 fn stamp() -> PathBuf {
     usage::state_dir().join("version")
+}
+
+/// What `stamp()` holds once this build has migrated under this Herdr.
+pub fn stamp_now() -> String {
+    format!("{VERSION}{}", if herdr::glue() { "+glue" } else { "" })
 }
 
 /// Files older builds kept that nothing reads any more.
@@ -59,7 +66,8 @@ fn clean(state: &Path, old_dir: &Path, config: &Path) -> usize {
 /// only what an earlier setup put in place, so a fresh install stays for
 /// `setup` to do.
 pub fn migrate(force: bool) {
-    if !force && fs::read_to_string(stamp()).is_ok_and(|s| s.trim() == VERSION) {
+    let now = stamp_now();
+    if !force && fs::read_to_string(stamp()).is_ok_and(|s| s.trim() == now) {
         return;
     }
     let Ok(lock) = fs::File::create(usage::state_dir().join("upgrade.lock")) else { return };
@@ -70,9 +78,10 @@ pub fn migrate(force: bool) {
     let _ = context::claude_hook("refresh");
     if setup::configured() {
         let _ = setup::apply_config();
+        context::report_all(); // the bars' tokens are shaped for glue or not
     }
     let _ = dock::restart();
-    let _ = fs::write(stamp(), VERSION);
+    let _ = fs::write(stamp(), now);
 }
 
 // ── update: install only a newer version ──

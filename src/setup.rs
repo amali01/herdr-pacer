@@ -111,7 +111,7 @@ fn patch(doc: &mut DocumentMut) -> Vec<String> {
 /// Sets `[ui.sidebar.agents] rows` for the saved layout: added, updated or
 /// unchanged.
 fn put_rows(doc: &mut DocumentMut) -> &'static str {
-    let snippet: DocumentMut = context::rows_toml(&settings::load()).parse().expect("generated rows are TOML");
+    let snippet: DocumentMut = context::rows_toml(&settings::load(), herdr::glue()).parse().expect("generated rows are TOML");
     let rows = snippet["ui"]["sidebar"]["agents"]["rows"].clone();
     let agents = table(doc, &["ui", "sidebar", "agents"]);
     match agents.get("rows") {
@@ -205,27 +205,16 @@ fn rewrite(change: impl FnOnce(&mut DocumentMut) -> bool) -> Result<(), String> 
     Ok(())
 }
 
-fn glue_supported() -> bool {
-    let herdr = std::env::var("HERDR_BIN_PATH").unwrap_or_else(|_| "herdr".into());
-    std::process::Command::new(herdr)
-        .arg("--default-config")
-        .output()
-        .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("glue = true"))
-}
-
 pub fn run() -> Result<(), String> {
     println!("==> 1/4 Claude Code statusLine wrapper");
     for line in context::claude_hook("install")?.lines() {
         println!("    {line}");
     }
 
-    println!("==> 2/4 Herdr with the glue patch");
-    if glue_supported() {
-        println!("    glue supported");
-    } else {
-        println!("    WARNING: this herdr has no `glue` token option, so the context bar");
-        println!("    renders as \"used · rail\". Build a patched herdr with");
-        println!("    {}/herdr-build.sh, install it, then rerun.", dock::root().display());
+    println!("==> 2/4 Herdr's sidebar token options");
+    match herdr::glue() {
+        true => println!("    glue supported: bars draw used and rail in two colors"),
+        false => println!("    stock herdr: bars draw in one color (the rows follow herdr as it updates)"),
     }
 
     let path = config_path();
@@ -256,7 +245,7 @@ pub fn run() -> Result<(), String> {
         Err(_) => println!("    no running server (start herdr once; config applies then)"),
     }
 
-    let _ = std::fs::write(crate::usage::state_dir().join("version"), crate::upgrade::VERSION);
+    let _ = std::fs::write(crate::usage::state_dir().join("version"), crate::upgrade::stamp_now());
     println!();
     println!("done — context bars appear under each Claude session as its status line");
     println!("refreshes, and the 5h and weekly windows sit in a dock along the bottom of");

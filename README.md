@@ -58,10 +58,11 @@ stub for two, the numbers alone for three — so the line fits the sidebar.
 
 Two details made it work:
 
-- **`herdr-glue.patch`** adds a `glue = true` token option to Herdr. Stock Herdr
-  always inserts `" · "` between row tokens, which would run straight through
-  the middle of every bar. With glue, the used half and the rail are two
-  differently styled tokens rendered flush.
+- **Stock Herdr draws each bar as one token.** Herdr inserts `" · "` between row
+  tokens, which would run straight through the middle of a bar, so the used
+  dots and the rail travel in one token, in one color. On a Herdr built with
+  the optional `herdr-glue.patch`, the rail is its own gray token rendered
+  flush (`glue = true`).
 - **The bar carries its color in its token name.** Herdr's `rules` can recolor a
   token by value, but only when the value parses as a number — and a bar is
   braille. So each metric reports exactly one of `pacer_<m>_{ok,warn,hot,crit}`
@@ -204,14 +205,13 @@ versions left, and restarts the docks. There is no need to run `setup` again.
   it: `herdr plugin unlink herdr-pacer` first, or pull and
   `cargo build --release` in the checkout.
 
-**The sidebar bars need a Herdr built with `herdr-glue.patch`.** Stock Herdr
-inserts `" · "` between row tokens, straight through the middle of every bar, and
-the option that suppresses it is not upstream (checked through v0.9.1). Without
-the patch nothing breaks — the usage dock is plain plugin code and unaffected,
-and the sidebar bar just renders as `used · rail`. To build one, run
-`./herdr-build.sh` from the plugin directory (`herdr plugin list` prints it),
-install the binary it leaves in `target/release/herdr`, then invoke `setup`
-again.
+**The sidebar bars work on stock Herdr** and draw in one color. A Herdr built
+with `herdr-glue.patch` (`./herdr-build.sh`) draws the rail in gray. The plugin
+asks the installed Herdr whether it parses `glue` and writes the rows to
+match. When the binary changes, for example when Herdr's self-update swaps a
+patched build for a stock one, the next hook notices and rewrites the rows.
+Stock Herdr would otherwise reject the whole `config.toml` over the unknown
+field.
 
 Or work from a clone, which is also how you'd hack on it:
 
@@ -219,7 +219,6 @@ Or work from a clone, which is also how you'd hack on it:
 git clone https://github.com/amali01/herdr-pacer.git
 cd herdr-pacer
 cargo build --release
-./herdr-build.sh            # builds a patched herdr; prints how to install it
 herdr plugin link .
 target/release/herdr-pacer setup
 ```
@@ -227,7 +226,7 @@ target/release/herdr-pacer setup
 `setup` is idempotent, backs up every file it touches, and:
 
 1. wraps the Claude Code statusLine with `herdr-pacer statusline`,
-2. checks that the running Herdr understands `glue`,
+2. checks whether the running Herdr understands `glue`,
 3. adds the sidebar bar rows and the dock key to `config.toml`, and
 4. reloads Herdr and restarts the docks, so they run the new build.
 
@@ -271,7 +270,7 @@ anyone can list. The OpenCode database is opened read-only.
 | `src/upgrade.rs` | `update` (installs only a newer version) and the once-per-version migration |
 | `claude-statusline.sh` | A shim for statusLines wrapped by the shell-script versions |
 | `src/herdr.rs` | Herdr's socket API |
-| `herdr-glue.patch` | The Herdr change the bars need |
+| `herdr-glue.patch` | Optional Herdr change: a gray rail flush with the bar |
 | `herdr-build.sh` | Clones Herdr, applies the patch, builds it |
 | `herdr-plugin.toml` | Plugin manifest: build, hooks, actions, the popup, settings and dock panes |
 

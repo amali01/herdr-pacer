@@ -30,8 +30,9 @@ fn env_u64(name: &str, default: u64) -> u64 {
 }
 
 /// The tokens of metric `m` (an index into METRICS) at `pct`, or the ones
-/// that clear it (`None`).
-fn tokens(m: usize, pct: Option<u32>, s: &Settings) -> Map<String, Value> {
+/// that clear it (`None`). Without `glue` (stock Herdr) the rail rides in the
+/// used token, in its color, since a separate one would sit behind " · ".
+fn tokens(m: usize, pct: Option<u32>, s: &Settings, glue: bool) -> Map<String, Value> {
     let prefix = METRICS[m].1;
     let shown = s.metrics.iter().filter(|&&on| on).count();
     let rows_cells = env_u64("HERDR_PACER_CTX_CELLS", 10) as usize;
@@ -43,7 +44,7 @@ fn tokens(m: usize, pct: Option<u32>, s: &Settings) -> Map<String, Value> {
         (true, 2) => 2,
         _ => 0,
     };
-    let lead = if s.one_line && s.metrics[..m].contains(&true) { "⠀" } else { "" };
+    let lead = if glue && s.one_line && s.metrics[..m].contains(&true) { "⠀" } else { "" };
     let text = |p: u32, used: &str| {
         let label = if shown > 1 { METRICS[m].2 } else { "" };
         let pct = if s.one_line { format!("{p}%") } else { format!("{p:>3}%") };
@@ -55,7 +56,9 @@ fn tokens(m: usize, pct: Option<u32>, s: &Settings) -> Map<String, Value> {
         if cells == 0 { format!("{lead}{head}") } else { format!("{lead}{head} {used}") }
     };
     let mut map = Map::new();
-    let bar = pct.map(|p| usage::bar(p, cells, s.sidebar_style, s.sidebar_size));
+    let bar = pct
+        .map(|p| usage::bar(p, cells, s.sidebar_style, s.sidebar_size))
+        .map(|(used, rail)| if glue { (used, rail) } else { (used + &rail, String::new()) });
     for (b, _) in BUCKETS {
         let mine = pct.is_some_and(|p| usage::bucket(p) == b);
         let value = match (&bar, mine) {
@@ -83,21 +86,22 @@ fn legacy() -> Map<String, Value> {
 // ── the rows config.toml carries ──
 
 /// A metric's five tokens. After the first metric on one line they are glued
-/// on, and the value brings its own leading blank.
-fn group(prefix: &str, glued: bool) -> String {
-    let glue = if glued { ", glue = true" } else { "" };
+/// on, and the value brings its own leading blank. A Herdr without `glue`
+/// gets none: it would reject the whole config.toml.
+fn group(prefix: &str, glued: bool, glue: bool) -> String {
+    let attr = |on: bool| if glue && on { ", glue = true" } else { "" };
     let used: Vec<String> = BUCKETS
         .iter()
-        .map(|(b, fg)| format!("{{ token = \"$pacer_{prefix}_{b}\", fg = \"{fg}\"{glue} }}"))
+        .map(|(b, fg)| format!("{{ token = \"$pacer_{prefix}_{b}\", fg = \"{fg}\"{} }}", attr(glued)))
         .collect();
-    format!("[{}, {{ token = \"$pacer_{prefix}\", fg = \"{RAIL_FG}\", glue = true }}]", used.join(", "))
+    format!("[{}, {{ token = \"$pacer_{prefix}\", fg = \"{RAIL_FG}\"{} }}]", used.join(", "), attr(true))
 }
 
 /// `[ui.sidebar.agents] rows` for the chosen layout. Rows of metrics that are
 /// switched off stay: Herdr hides a row whose tokens are all unreported.
-pub fn rows_toml(s: &Settings) -> String {
+pub fn rows_toml(s: &Settings, glue: bool) -> String {
     let mut rows = vec![r#"["state_icon", "machine", "workspace", "tab"]"#.to_string(), r#"["agent"]"#.to_string()];
-    let groups: Vec<String> = METRICS.iter().enumerate().map(|(i, m)| group(m.1, s.one_line && i > 0)).collect();
+    let groups: Vec<String> = METRICS.iter().enumerate().map(|(i, m)| group(m.1, s.one_line && i > 0, glue)).collect();
     match s.one_line {
         true => rows.push(format!("[{}]", groups.iter().map(|g| &g[1..g.len() - 1]).collect::<Vec<_>>().join(", "))),
         false => rows.extend(groups),
@@ -136,7 +140,7 @@ pub fn report(pane: &str, pct: Option<u32>, ttl_ms: u64) -> herdr::Result<()> {
     remember(pane, pct);
     let s = settings::load();
     let pct = pct.filter(|_| s.metrics[0]);
-    herdr::report_tokens(pane, Value::Object(tokens(0, pct, &s)), pct.map(|_| ttl_ms))
+    herdr::report_tokens(pane, Value::Object(tokens(0, pct, &s, herdr::glue())), pct.map(|_| ttl_ms))
 }
 
 fn provider(agent: &str) -> Option<&'static str> {
@@ -151,9 +155,9 @@ fn provider(agent: &str) -> Option<&'static str> {
 /// This pane's 5h and weekly bars, from the usage cache for its agent's account.
 pub fn report_usage(pane: &str, agent: &str, s: &Settings, rows: &[usage::Row]) -> herdr::Result<()> {
     let found = provider(agent).and_then(|key| usage::agents(rows).into_iter().find(|a| a.key == key));
-    let mut map = Map::new();
+    let (mut map, glue) = (Map::new(), herdr::glue());
     for (m, window) in [(1, found.as_ref().and_then(|a| a.five.as_ref())), (2, found.as_ref().and_then(|a| a.week.as_ref()))] {
-        map.extend(tokens(m, window.map(|w| w.pct).filter(|_| s.metrics[m]), s));
+        map.extend(tokens(m, window.map(|w| w.pct).filter(|_| s.metrics[m]), s, glue));
     }
     herdr::report_tokens(pane, Value::Object(map), Some(env_u64("HERDR_PACER_CTX_TTL_MS", 21_600_000)))
 }
@@ -167,7 +171,7 @@ pub fn report_all() {
         let (Some(pane), Some(agent)) = (a["pane_id"].as_str(), a["agent"].as_str()) else { continue };
         let _ = herdr::report_tokens(pane, Value::Object(legacy()), None);
         let pct = recalled(pane);
-        let _ = herdr::report_tokens(pane, Value::Object(tokens(0, pct.filter(|_| s.metrics[0]), &s)), Some(21_600_000));
+        let _ = herdr::report_tokens(pane, Value::Object(tokens(0, pct.filter(|_| s.metrics[0]), &s, herdr::glue())), Some(21_600_000));
         let _ = report_usage(pane, agent, &s, &rows);
     }
 }
@@ -433,26 +437,32 @@ mod tests {
     #[test]
     fn one_bucket_reported_the_rest_cleared() {
         let s = Settings::default();
-        let t = tokens(0, Some(72), &s);
+        let t = tokens(0, Some(72), &s, true);
         assert_eq!(t["pacer_ctx_hot"], " 72% ⣤⣤⣤⣤⣤⣤⣤");
         assert_eq!(t["pacer_ctx"], "⣀⣀⣀");
         assert!(t["pacer_ctx_ok"].is_null() && t["pacer_ctx_crit"].is_null());
-        assert!(tokens(0, None, &s).values().all(Value::is_null));
+        assert!(tokens(0, None, &s, true).values().all(Value::is_null));
         let rows = Settings { metrics: [true; 3], sidebar_size: 3, ..s.clone() };
-        assert_eq!(tokens(1, Some(100), &rows)["pacer_5h_crit"], "5h  100% ⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶");
-        assert!(tokens(1, Some(100), &rows)["pacer_5h"].is_null(), "no rail left at 100%");
+        assert_eq!(tokens(1, Some(100), &rows, true)["pacer_5h_crit"], "5h  100% ⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶");
+        assert!(tokens(1, Some(100), &rows, true)["pacer_5h"].is_null(), "no rail left at 100%");
         let line = Settings { one_line: true, ..rows.clone() };
-        assert_eq!(tokens(0, Some(58), &line)["pacer_ctx_warn"], "ctx 58%");
-        assert_eq!(tokens(2, Some(49), &line)["pacer_wk_ok"], "⠀wk 49%", "glued on after 5h");
-        assert!(tokens(2, Some(49), &line)["pacer_wk"].is_null(), "numbers only for three");
+        assert_eq!(tokens(0, Some(58), &line, true)["pacer_ctx_warn"], "ctx 58%");
+        assert_eq!(tokens(2, Some(49), &line, true)["pacer_wk_ok"], "⠀wk 49%", "glued on after 5h");
+        assert!(tokens(2, Some(49), &line, true)["pacer_wk"].is_null(), "numbers only for three");
         let two = Settings { metrics: [true, false, true], ..line };
-        assert_eq!(tokens(2, Some(50), &two)["pacer_wk_warn"], "⠀wk 50% ⣶");
+        assert_eq!(tokens(2, Some(50), &two, true)["pacer_wk_warn"], "⠀wk 50% ⣶");
+        // stock Herdr: the rail rides in the used token, no blank to glue with
+        let stock = tokens(0, Some(72), &s, false);
+        assert_eq!(stock["pacer_ctx_hot"], " 72% ⣤⣤⣤⣤⣤⣤⣤⣀⣀⣀");
+        assert!(stock["pacer_ctx"].is_null());
+        assert_eq!(tokens(2, Some(50), &two, false)["pacer_wk_warn"], "wk 50% ⣶⣀");
     }
 
     #[test]
     fn rows_fit_herdr_limits_in_either_layout() {
-        for one_line in [false, true] {
-            let text = rows_toml(&Settings { one_line, ..Settings::default() });
+        for (one_line, glue) in [(false, true), (true, true), (false, false), (true, false)] {
+            let text = rows_toml(&Settings { one_line, ..Settings::default() }, glue);
+            assert_eq!(text.contains("glue"), glue, "stock Herdr rejects the whole file over glue");
             let doc: toml_edit::DocumentMut = text.parse().expect("valid TOML");
             let rows = doc["ui"]["sidebar"]["agents"]["rows"].as_array().unwrap();
             assert_eq!(rows.len(), if one_line { 3 } else { 5 });

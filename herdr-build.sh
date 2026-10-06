@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # herdr-pacer — herdr-build.sh
-# Builds a Herdr with herdr-glue.patch applied. The sidebar gauges need the
-# `glue` token option; stock Herdr always inserts " · " between row tokens, so
-# the used arc and the track cannot sit flush.
+# Builds a Herdr with herdr-glue.patch applied. Optional: on stock Herdr the
+# sidebar bars draw in one color, since it always inserts " · " between row
+# tokens; with `glue` the gray rail sits flush against the used part.
 #
 # Usage: ./herdr-build.sh [version]     (default: the installed herdr's version)
 # Leaves the binary at target/release/herdr and prints how to install it.

@@ -46,3 +46,38 @@ pub fn report_tokens(pane_id: &str, tokens: Value, ttl_ms: Option<u64>) -> Resul
     }
     call("pane.report_metadata", params).map(drop)
 }
+
+fn bin() -> std::path::PathBuf {
+    std::env::var_os("HERDR_BIN_PATH").map(Into::into).unwrap_or_else(|| {
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        std::env::split_paths(&path).map(|d| d.join("herdr")).find(|p| p.is_file()).unwrap_or_else(|| "herdr".into())
+    })
+}
+
+/// Whether this Herdr parses the `glue` token option (herdr-glue.patch). Stock
+/// Herdr rejects the whole config.toml over a field it does not know, so the
+/// rows follow what the binary can parse. Cached against the binary's size
+/// and mtime: a Herdr update — its self-update replaces a patched build with
+/// a stock one — shows up as a new answer on the next hook.
+pub fn glue() -> bool {
+    let bin = bin();
+    let id = std::fs::metadata(&bin).map(|m| format!("{} {:?}", m.len(), m.modified().ok())).unwrap_or_default();
+    let cache = crate::usage::state_dir().join("herdr-glue");
+    if let Some(hit) = std::fs::read_to_string(&cache).ok().and_then(|t| t.strip_prefix(&format!("{id}\n")).map(|v| v == "1")) {
+        return hit;
+    }
+    // ask the binary's own parser: a config holding one glued token
+    let probe = crate::usage::state_dir().join(format!("glue-probe-{}.toml", std::process::id()));
+    let wrote = std::fs::write(&probe, "[ui.sidebar.agents]\nrows = [[{ token = \"$a\" }, { token = \"$b\", glue = true }]]\n");
+    // a missing file checks out fine, so no file, no glue
+    let glue = wrote.is_ok() && std::process::Command::new(&bin)
+        .args(["config", "check"])
+        .env("HERDR_CONFIG_PATH", &probe)
+        .output()
+        .is_ok_and(|o| o.status.success());
+    let _ = std::fs::remove_file(probe);
+    if !id.is_empty() {
+        let _ = std::fs::write(cache, format!("{id}\n{}", glue as u8));
+    }
+    glue
+}
