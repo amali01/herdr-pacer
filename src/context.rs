@@ -183,7 +183,19 @@ pub fn report_usage(pane: &str, agent: &str, account: &str, s: &Settings, rows: 
     for (m, window) in [(1, found.as_ref().and_then(|a| a.five.as_ref())), (2, found.as_ref().and_then(|a| a.week.as_ref()))] {
         map.extend(tokens(m, window.map(|w| w.pct).filter(|_| s.metrics[m]), s, glue));
     }
-    herdr::report_tokens(pane, Value::Object(map), Some(env_u64("HERDR_PACER_CTX_TTL_MS", 21_600_000)))
+    let mut params = json!({ "tokens": map });
+    match account_label(agent, account, found.as_ref()) {
+        Some(label) => params["display_agent"] = json!(label),
+        None => params["clear_display_agent"] = json!(true),
+    }
+    herdr::report_metadata(pane, params, Some(env_u64("HERDR_PACER_CTX_TTL_MS", 21_600_000)))
+}
+
+/// The sidebar's agent row names a second account the way the dock does
+/// (claude-2 is Claude-2), so a pane shows which login it runs on. The
+/// default keeps Herdr's own name.
+fn account_label(agent: &str, account: &str, found: Option<&usage::Agent>) -> Option<String> {
+    (agent == "claude" && !account.is_empty()).then(|| found.map_or_else(|| usage::account_title(account), |a| a.title.clone()))
 }
 
 /// Redraws every agent's bars: after a fetch, and when the settings change.
@@ -203,7 +215,9 @@ pub fn report_all() {
     for a in &agents {
         let (Some(pane), Some(agent)) = (a["pane_id"].as_str(), a["agent"].as_str()) else { continue };
         let _ = herdr::report_tokens(pane, Value::Object(legacy()), None);
-        let (pct, account) = (recalled(pane), pane_account(pane));
+        // the account file belongs to the pane's last Claude session, not to a codex after it
+        let account = if agent == "claude" { pane_account(pane) } else { String::new() };
+        let pct = recalled(pane);
         let _ = herdr::report_tokens(pane, Value::Object(tokens(0, pct.filter(|_| s.metrics[0]), &s, herdr::glue())), Some(21_600_000));
         let _ = report_usage(pane, agent, &account, &s, &rows);
     }
@@ -558,6 +572,10 @@ mod tests {
         assert_eq!((five(""), five("/h/.claude-2")), (Some(90), Some(12)));
         assert_eq!(five("/h/.claude-3"), None, "an account with no usage shows none, not the default's");
         assert!(pane_agent(&rows, "codex", "").is_none());
+        let label = |agent, account| account_label(agent, account, pane_agent(&rows, agent, account).as_ref());
+        assert_eq!(label("claude", "/h/.claude-2").as_deref(), Some("Claude-2"), "named as in the dock");
+        assert_eq!(label("claude", "/h/.claude-3").as_deref(), Some("Claude-3"), "before its first usage too");
+        assert_eq!((label("claude", ""), label("codex", "")), (None, None), "the default keeps Herdr's name");
     }
 
     #[test]

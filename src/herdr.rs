@@ -40,7 +40,13 @@ pub fn call(method: &str, params: Value) -> Result<Value> {
 
 /// The pane's tokens, set or cleared (`None`), under our metadata source.
 pub fn report_tokens(pane_id: &str, tokens: Value, ttl_ms: Option<u64>) -> Result<()> {
-    let mut params = json!({ "pane_id": pane_id, "source": "herdr-pacer", "tokens": tokens });
+    report_metadata(pane_id, json!({ "tokens": tokens }), ttl_ms)
+}
+
+/// The pane's metadata under our source: tokens, and the agent's display name.
+pub fn report_metadata(pane_id: &str, mut params: Value, ttl_ms: Option<u64>) -> Result<()> {
+    params["pane_id"] = json!(pane_id);
+    params["source"] = json!("herdr-pacer");
     if let Some(ttl) = ttl_ms {
         params["ttl_ms"] = json!(ttl);
     }

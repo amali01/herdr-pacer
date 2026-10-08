@@ -189,6 +189,9 @@ apart:
   shows the numbers alone.
 - **The sidebar's 5h and weekly bars** are the windows of the account that
   session runs on, never another account's.
+- **The sidebar's agent row** names a second account the way the dock does: a
+  pane on `~/.claude-2` reads **Claude-2** where Herdr would say `claude`. A
+  session on the default account keeps Herdr's own name.
 
 A session tells herdr-pacer its account through the statusLine, so a directory
 shows up the first time a session runs with it, and stays. To show an account
