@@ -143,7 +143,7 @@ fn strip(rows: &[Row], cols: usize, s: &Settings) -> Vec<String> {
     for a in &agents {
         let head = match (&a.plan, content >= a.title.len() + a.plan.len() + 2) {
             (plan, true) if !plan.is_empty() => format!("{}  {plan}", a.title),
-            _ => a.title.to_string(),
+            _ => a.title.clone(),
         };
         let edge = lines[0].width + width;
         lines[0].push(WHITE, &truncate(&head, content)).pad(edge);
@@ -188,7 +188,7 @@ fn full(rows: &[Row], s: &Settings) -> Vec<String> {
     }
     let section = |a: &Agent, out: &mut Vec<String>| {
         let mut head = Line::default();
-        head.push("", "  ").push(WHITE, a.title);
+        head.push("", "  ").push(WHITE, &a.title);
         if !a.plan.is_empty() {
             head.push(DIM, &format!("  {}", a.plan));
         }
@@ -343,7 +343,7 @@ mod tests {
     }
 
     fn row(provider: &str, window: &str, pct: u32) -> Row {
-        Row { provider: provider.into(), plan: String::new(), window: window.into(), pct, resets: None, error: None }
+        Row { provider: provider.into(), account: String::new(), plan: String::new(), window: window.into(), pct, resets: None, error: None }
     }
 
     fn strip_text(rows: &[Row], cols: usize, s: &Settings) -> Vec<String> {
@@ -388,5 +388,15 @@ mod tests {
         assert!(strip_text(&rows, 150, &claude_first)[0].starts_with("Claude"));
         let only_claude = Settings { agents: [false, true, false], ..s };
         assert!(!strip_text(&rows, 150, &only_claude)[0].contains("Codex"));
+    }
+
+    #[test]
+    fn a_column_per_claude_account() {
+        let second = Row { account: "/u/.claude-2".into(), ..row("claude", "5h", 12) };
+        let rows = [row("openai-codex", "5h", 97), row("claude", "5h", 5), second];
+        let lines = strip_text(&rows, 150, &Settings { order: [1, 0, 2], ..Settings::default() });
+        let at = |name| lines[0].find(name).unwrap();
+        assert!(at("Claude ") < at("Claude-2") && at("Claude-2") < at("Codex"), "together, in Claude's place: {:?}", lines[0]);
+        assert!(lines[1].contains("  5%") && lines[1].contains(" 12%"));
     }
 }

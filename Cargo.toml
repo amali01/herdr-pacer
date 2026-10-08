@@ -1,6 +1,6 @@
 [package]
 name = "herdr-pacer"
-version = "0.10.1"
+version = "0.11.0"
 edition = "2021"
 rust-version = "1.89"
 description = "Context-window bars and 5h/weekly usage for the agents Herdr runs"
@@ -9,6 +9,8 @@ publish = false
 
 [dependencies]
 crossterm = "0.28"
+# sha256 for the keychain name of a second Claude login; ureq's TLS already builds it
+ring = "0.17"
 # keeps a user's key order when the Claude settings file is rewritten
 serde_json = { version = "1.0", features = ["preserve_order"] }
 toml_edit = "0.22"

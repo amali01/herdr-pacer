@@ -35,6 +35,9 @@ pub struct Settings {
     pub tab_windows: [bool; 3],
     pub tab_style: Option<Style>,
     pub tab_size: u8,
+    /// Claude config dirs to show besides the default, as CLAUDE_CONFIG_DIR
+    /// names them. Sessions add theirs on their own; these need no session.
+    pub claude_dirs: Vec<String>,
 }
 
 impl Default for Settings {
@@ -54,6 +57,7 @@ impl Default for Settings {
             tab_windows: [true, true, false],
             tab_style: Some(Style::Dots),
             tab_size: 2,
+            claude_dirs: vec![],
         }
     }
 }
@@ -116,6 +120,7 @@ pub fn load() -> Settings {
             _ => Some(style(&v["tabbar"], Style::Dots)),
         },
         tab_size: size(&v["tabbar"], d.tab_size),
+        claude_dirs: v["claude"]["config_dirs"].as_array().into_iter().flatten().filter_map(Value::as_str).map(String::from).collect(),
     }
 }
 
@@ -144,7 +149,7 @@ fn object<const N: usize>(keys: [&str; N], values: [bool; N]) -> Value {
 }
 
 pub fn save(s: &Settings) {
-    let v = json!({
+    let mut v = json!({
         "hidden": s.hidden,
         "order": s.agents_in_order().map(|a| a.0),
         "dock": {
@@ -166,6 +171,9 @@ pub fn save(s: &Settings) {
             "size": s.tab_size,
         },
     });
+    if !s.claude_dirs.is_empty() {
+        v["claude"] = json!({ "config_dirs": s.claude_dirs });
+    }
     let _ = fs::create_dir_all(dir());
     let tmp = path().with_extension("tmp");
     let body = serde_json::to_string_pretty(&v).unwrap_or_default() + "\n";
@@ -200,6 +208,7 @@ mod tests {
             sidebar_style: Style::Slants,
             tab_agents: [true, false, true],
             tab_style: None,
+            claude_dirs: vec!["~/.claude-2".into()],
             ..load()
         };
         save(&s);

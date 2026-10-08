@@ -135,6 +135,23 @@ fn recalled(pane: &str) -> Option<u32> {
     (all[pane]["at"].as_i64()? > usage::now() - 6 * 3600).then(|| all[pane]["pct"].as_u64())?.map(|p| p as u32)
 }
 
+/// Which Claude account a pane runs on, a file per pane: the statusLine
+/// writes it on every run, so it holds from the session's first line, and
+/// no two panes share a read-modify-write. The default when there is none.
+fn account_file(pane: &str) -> PathBuf {
+    usage::state_dir().join(format!("claude-pane-{pane}"))
+}
+
+fn pane_account(pane: &str) -> String {
+    std::fs::read_to_string(account_file(pane)).unwrap_or_default()
+}
+
+fn set_pane_account(pane: &str, account: &str) {
+    if pane_account(pane) != account {
+        let _ = usage::write_atomic(&account_file(pane), account.as_bytes());
+    }
+}
+
 /// This pane's context bar, as the settings want it (cleared when off).
 pub fn report(pane: &str, pct: Option<u32>, ttl_ms: u64) -> herdr::Result<()> {
     remember(pane, pct);
@@ -152,14 +169,33 @@ fn provider(agent: &str) -> Option<&'static str> {
     }
 }
 
+/// The windows of the account a pane's agent runs on: never another
+/// account's, so a session on an account with none shows none.
+fn pane_agent(rows: &[usage::Row], agent: &str, account: &str) -> Option<usage::Agent> {
+    let key = provider(agent)?;
+    usage::agents(rows).into_iter().find(|a| a.key == key && a.account == account)
+}
+
 /// This pane's 5h and weekly bars, from the usage cache for its agent's account.
-pub fn report_usage(pane: &str, agent: &str, s: &Settings, rows: &[usage::Row]) -> herdr::Result<()> {
-    let found = provider(agent).and_then(|key| usage::agents(rows).into_iter().find(|a| a.key == key));
+pub fn report_usage(pane: &str, agent: &str, account: &str, s: &Settings, rows: &[usage::Row]) -> herdr::Result<()> {
+    let found = pane_agent(rows, agent, account);
     let (mut map, glue) = (Map::new(), herdr::glue());
     for (m, window) in [(1, found.as_ref().and_then(|a| a.five.as_ref())), (2, found.as_ref().and_then(|a| a.week.as_ref()))] {
         map.extend(tokens(m, window.map(|w| w.pct).filter(|_| s.metrics[m]), s, glue));
     }
-    herdr::report_tokens(pane, Value::Object(map), Some(env_u64("HERDR_PACER_CTX_TTL_MS", 21_600_000)))
+    let mut params = json!({ "tokens": map });
+    match account_label(agent, account, found.as_ref()) {
+        Some(label) => params["display_agent"] = json!(label),
+        None => params["clear_display_agent"] = json!(true),
+    }
+    herdr::report_metadata(pane, params, Some(env_u64("HERDR_PACER_CTX_TTL_MS", 21_600_000)))
+}
+
+/// The sidebar's agent row names a second account the way the dock does
+/// (claude-2 is Claude-2), so a pane shows which login it runs on. The
+/// default keeps Herdr's own name.
+fn account_label(agent: &str, account: &str, found: Option<&usage::Agent>) -> Option<String> {
+    (agent == "claude" && !account.is_empty()).then(|| found.map_or_else(|| usage::account_title(account), |a| a.title.clone()))
 }
 
 /// Redraws every agent's bars: after a fetch, and when the settings change.
@@ -167,12 +203,23 @@ pub fn report_all() {
     let s = settings::load();
     let rows = usage::load();
     let Ok(list) = call("agent.list", json!({})) else { return };
-    for a in list["agents"].as_array().into_iter().flatten() {
+    let agents = list["agents"].as_array().cloned().unwrap_or_default();
+    let panes: Vec<&str> = agents.iter().filter_map(|a| a["pane_id"].as_str()).collect();
+    // a pane that is gone forgets its account; a new session in a pane says its own
+    for file in std::fs::read_dir(usage::state_dir()).into_iter().flatten().flatten() {
+        let name = file.file_name().to_string_lossy().into_owned();
+        if name.strip_prefix("claude-pane-").is_some_and(|pane| !panes.contains(&pane)) {
+            let _ = std::fs::remove_file(file.path());
+        }
+    }
+    for a in &agents {
         let (Some(pane), Some(agent)) = (a["pane_id"].as_str(), a["agent"].as_str()) else { continue };
         let _ = herdr::report_tokens(pane, Value::Object(legacy()), None);
+        // the account file belongs to the pane's last Claude session, not to a codex after it
+        let account = if agent == "claude" { pane_account(pane) } else { String::new() };
         let pct = recalled(pane);
         let _ = herdr::report_tokens(pane, Value::Object(tokens(0, pct.filter(|_| s.metrics[0]), &s, herdr::glue())), Some(21_600_000));
-        let _ = report_usage(pane, agent, &s, &rows);
+        let _ = report_usage(pane, agent, &account, &s, &rows);
     }
 }
 
@@ -180,14 +227,15 @@ pub fn report_all() {
 
 /// Runs the statusLine command it wraps — whatever drew the line keeps
 /// drawing it — and reports the context percentage from the payload on its
-/// way past. With nothing to wrap it prints a minimal `ctx N%`.
+/// way past, with the 5h and weekly windows of the account the session runs
+/// on (its CLAUDE_CONFIG_DIR). With nothing to wrap it prints a minimal
+/// `ctx N%`.
 pub fn statusline() -> i32 {
     let mut payload = String::new();
     let _ = std::io::stdin().read_to_string(&mut payload);
-    let pct = serde_json::from_str::<Value>(&payload)
-        .ok()
-        .and_then(|v| v["context_window"]["used_percentage"].as_f64())
-        .map(|p| p.round().max(0.0) as u32);
+    let v = serde_json::from_str::<Value>(&payload).unwrap_or_default();
+    let pct = v["context_window"]["used_percentage"].as_f64().map(|p| p.round().max(0.0) as u32);
+    let account = std::env::var("CLAUDE_CONFIG_DIR").unwrap_or_default();
     let inner = std::env::var("HERDR_PACER_STATUSLINE").unwrap_or_default();
     let code = if inner.is_empty() {
         println!("ctx {}%", pct.unwrap_or(0));
@@ -205,21 +253,37 @@ pub fn statusline() -> i32 {
         }
     };
     // after the line is out, so Claude never waits on the Herdr socket for it
+    let fresh = usage::claude_from_statusline(&account, &v["rate_limits"]);
     if let Ok(pane) = std::env::var("HERDR_PANE_ID") {
+        set_pane_account(&pane, &account);
         if pct.is_some() {
             let _ = report(&pane, pct, env_u64("HERDR_PACER_CTX_TTL_MS", 300_000)); // the line refreshes every minute
         }
-        let _ = report_usage(&pane, "claude", &settings::load(), &usage::load());
+        let _ = report_usage(&pane, "claude", &account, &settings::load(), &fresh.unwrap_or_else(usage::load));
     }
     code
 }
 
 // ── claude: installing the wrapper ──
 
-fn settings_path() -> PathBuf {
-    std::env::var_os("CLAUDE_SETTINGS_PATH")
+/// The settings.json of every Claude account, the default's first; a file
+/// two accounts share through a link is listed once.
+fn settings_paths() -> Vec<PathBuf> {
+    let default = std::env::var_os("CLAUDE_SETTINGS_PATH")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".claude/settings.json"))
+        .unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".claude/settings.json"));
+    let mut paths = vec![default];
+    let mut real: Vec<PathBuf> = paths.iter().filter_map(|p| p.canonicalize().ok()).collect();
+    for dir in usage::claude_accounts().into_iter().skip(1) {
+        let path = PathBuf::from(dir).join("settings.json");
+        match path.canonicalize() {
+            Ok(r) if real.contains(&r) => continue,
+            Ok(r) => real.push(r),
+            Err(_) => {}
+        }
+        paths.push(path);
+    }
+    paths
 }
 
 fn quote(s: &str) -> String {
@@ -269,23 +333,45 @@ pub fn backup(path: &std::path::Path) -> Option<PathBuf> {
     Some(copy)
 }
 
-/// install | remove | status | refresh of the statusLine wrapper in Claude's
-/// settings. `refresh` rewraps only a statusLine already wrapped, by any build.
+/// install | remove | status | refresh of the statusLine wrapper in the
+/// settings of every Claude account; each line names its file when there
+/// is more than one.
 pub fn claude_hook(action: &str) -> Result<String, String> {
-    let path = settings_path();
+    let paths = settings_paths();
+    if !["install", "remove", "status", "refresh"].contains(&action) {
+        return Err("usage: herdr-pacer claude-hook install | remove | status | refresh".into());
+    }
+    // one file that will not parse leaves the others to be done; its error names it
+    let (mut out, mut failed) = (vec![], false);
+    for path in &paths {
+        match hook(path, action) {
+            Ok(said) if paths.len() > 1 => out.push(format!("{}: {said}", path.display())),
+            Ok(said) => out.push(said),
+            Err(e) => {
+                failed = true;
+                out.push(e);
+            }
+        }
+    }
+    if failed { Err(out.join("\n")) } else { Ok(out.join("\n")) }
+}
+
+/// The wrapper in one settings file. `refresh` rewraps only a statusLine
+/// already wrapped, by any build.
+fn hook(path: &std::path::Path, action: &str) -> Result<String, String> {
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|_| "{}".into());
+    let text = std::fs::read_to_string(path).unwrap_or_else(|_| "{}".into());
     let mut settings: Value = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
     let current = settings["statusLine"]["command"].as_str().unwrap_or("").to_string();
     let inner = wrapped_inner(&current);
     let exe = std::env::current_exe().and_then(|p| p.canonicalize()).map_err(|e| e.to_string())?;
     let ours = format!("{} statusline", quote(&exe.to_string_lossy()));
     let write = |settings: &Value| -> Result<Option<PathBuf>, String> {
-        let saved = path.exists().then(|| backup(&path)).flatten();
+        let saved = path.exists().then(|| backup(path)).flatten();
         let body = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())? + "\n";
-        std::fs::write(&path, body).map_err(|e| format!("{}: {e}", path.display()))?;
+        std::fs::write(path, body).map_err(|e| format!("{}: {e}", path.display()))?;
         Ok(saved)
     };
     let show = |s: &str| if s.is_empty() { "<none>".to_string() } else { s.to_string() };
@@ -399,7 +485,7 @@ fn update_pane(pane: &str, agent: Option<&str>) {
     };
     let _ = report(pane, pct, env_u64("HERDR_PACER_CTX_TTL_MS", 21_600_000));
     usage::fetch(false); // the 5h and weekly bars stay fresh while the dock is hidden
-    let _ = report_usage(pane, agent.as_deref().unwrap_or(""), &settings::load(), &usage::load());
+    let _ = report_usage(pane, agent.as_deref().unwrap_or(""), "", &settings::load(), &usage::load());
 }
 
 /// sweep | pane <id> [agent] | event
@@ -468,6 +554,28 @@ mod tests {
             assert_eq!(rows.len(), if one_line { 3 } else { 5 });
             assert!(rows.iter().all(|r| r.as_array().unwrap().len() <= 16));
         }
+    }
+
+    #[test]
+    fn a_pane_shows_the_account_it_runs_on() {
+        let row = |account: &str, window: &str, pct| usage::Row {
+            provider: "claude".into(),
+            account: account.into(),
+            plan: String::new(),
+            window: window.into(),
+            pct,
+            resets: None,
+            error: None,
+        };
+        let rows = [row("", "5h", 90), row("/h/.claude-2", "5h", 12)];
+        let five = |account| pane_agent(&rows, "claude", account).and_then(|a| a.five).map(|r| r.pct);
+        assert_eq!((five(""), five("/h/.claude-2")), (Some(90), Some(12)));
+        assert_eq!(five("/h/.claude-3"), None, "an account with no usage shows none, not the default's");
+        assert!(pane_agent(&rows, "codex", "").is_none());
+        let label = |agent, account| account_label(agent, account, pane_agent(&rows, agent, account).as_ref());
+        assert_eq!(label("claude", "/h/.claude-2").as_deref(), Some("Claude-2"), "named as in the dock");
+        assert_eq!(label("claude", "/h/.claude-3").as_deref(), Some("Claude-3"), "before its first usage too");
+        assert_eq!((label("claude", ""), label("codex", "")), (None, None), "the default keeps Herdr's name");
     }
 
     #[test]
