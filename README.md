@@ -174,6 +174,36 @@ turn, dock or no dock. The choices live in `settings.json` in the plugin's confi
 directory (`herdr plugin config-dir herdr-pacer`); switching the layout rewrites
 the sidebar rows in `config.toml` and reloads Herdr.
 
+### More than one Claude account
+
+Claude Code keeps a login per config directory: start it with
+`CLAUDE_CONFIG_DIR=~/.claude-2 claude` and that session runs on a second
+account, with its own 5h and weekly windows. herdr-pacer shows each account
+apart:
+
+- **The dock, the popup and the tab bar** give every account its own column,
+  section or segment, side by side where Claude sits in the order and named
+  after its directory: `~/.claude-2` is **Claude-2**, `~/.claude-work`
+  **Claude-work**. The Claude switches in the settings cover all of them. When
+  two accounts' bars would not fit the tab bar's 80 characters, its segment
+  shows the numbers alone.
+- **The sidebar's 5h and weekly bars** are the windows of the account that
+  session runs on, never another account's.
+
+A session tells herdr-pacer its account through the statusLine, so a directory
+shows up the first time a session runs with it, and stays. To show an account
+before any session has run on it, list its directory in `settings.json`, spelled
+the way you set `CLAUDE_CONFIG_DIR`:
+
+```json
+"claude": { "config_dirs": ["~/.claude-2"] }
+```
+
+A directory that no longer exists is skipped, and so is an account that is not
+signed in. `setup` and the `claude-hook` actions wrap the statusLine in every
+account's `settings.json`; a file two accounts share through a link is wrapped
+once.
+
 ## Install and update
 
 herdr-pacer is one Rust binary, built by Herdr from source on install and on
@@ -242,10 +272,11 @@ upgraded in place: `setup` rewraps the statusLine around the same inner command.
 | Reading | Source | Needs |
 |---|---|---|
 | Claude context | the statusLine payload (`context_window.used_percentage`) | the wrapper installed |
+| Claude 5h / weekly, while a session runs | the statusLine payload (`rate_limits`), kept for that session's account | the wrapper installed |
 | Codex context | the composer footer — `pane.read` picks up the `Context N% left` the TUI already prints | nothing |
 | OpenCode context | its SQLite: the last turn's `tokens.total` for the session in that pane's directory, over the model's context limit from opencode's models cache | `sqlite3` |
 | Codex 5h / weekly | `codex app-server` → `account/rateLimits/read` | signed-in `codex` CLI |
-| Claude 5h / weekly | `api.anthropic.com/api/oauth/usage` — cc-pacer's cache is reused when it happens to be warm | signed-in Claude Code |
+| Claude 5h / weekly, otherwise | `api.anthropic.com/api/oauth/usage`, with each account's own login: `.credentials.json` in its config directory, or the keychain entry Claude Code names after that directory | signed-in Claude Code |
 | OpenCode 5h / weekly | `omp usage --json` | `omp` on `PATH` |
 
 A startup sweep covers sessions that were already running when Herdr started.
@@ -277,7 +308,8 @@ anyone can list. The OpenCode database is opened read-only.
 `cargo test` covers the bar and its thickness, the thresholds, reset-time
 parsing, the Codex limits, the dock's layout math and how its strip narrows,
 the sidebar tokens and rows in both layouts, the settings file and popup, the
-statusLine quoting, and the `config.toml` migration.
+statusLine quoting, the `config.toml` migration, and Claude accounts: their
+keychain names, titles, and which windows a session on each one shows.
 
 ## Knobs
 
@@ -300,8 +332,8 @@ Colors live in `config.toml`, not in the reporter — Herdr styles the tokens.
 - [Kamyil/herdr-usage-popup](https://github.com/Kamyil/herdr-usage-popup) — provider collectors.
 - [amali01/cc-pacer](https://github.com/amali01/cc-pacer) — where the Claude usage
   endpoint and the color thresholds came from. **Not a dependency:** herdr-pacer
-  fetches usage itself and only borrows cc-pacer's cache when it is already warm,
-  and if cc-pacer is drawing your status line the wrapper leaves it drawing it.
+  fetches usage itself, and if cc-pacer is drawing your status line the wrapper
+  leaves it drawing it.
 
 MIT, except `herdr-glue.patch`, which is a change to Herdr and carries Herdr's
 Apache-2.0 license.

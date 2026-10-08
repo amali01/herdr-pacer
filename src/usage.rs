@@ -3,9 +3,12 @@
 //! Know-how reused (with thanks):
 //!   - Kamyil/herdr-usage-popup: Codex over `codex app-server`, OpenCode over
 //!     `omp usage --json`.
-//!   - amali01/cc-pacer: the Claude OAuth usage endpoint, its cache, and the
-//!     back-off around it. cc-pacer's own cache is preferred when it is fresh,
-//!     so a running Claude session pays for the request and we just read it.
+//!   - amali01/cc-pacer: the Claude OAuth usage endpoint and the back-off
+//!     around it.
+//!
+//! Claude can be signed in more than once: each CLAUDE_CONFIG_DIR is a login
+//! of its own, with its own windows. Every one known is collected and shown
+//! on its own (see `claude_accounts`).
 //!
 //! The 5h, weekly and monthly windows are collected; the settings pick which
 //! of them the dock shows. Billing and credit balances are left out — this is
@@ -158,6 +161,8 @@ fn rfc3339(s: &str) -> Option<i64> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Row {
     pub provider: String,
+    /// Which login of the provider: a Claude config dir, "" for the default.
+    pub account: String,
     pub plan: String,
     pub window: String,
     pub pct: u32,
@@ -169,6 +174,7 @@ impl Row {
     fn window(provider: &str, plan: &str, window: String, pct: f64, resets: Option<i64>) -> Row {
         Row {
             provider: provider.into(),
+            account: String::new(),
             plan: plan.into(),
             window,
             pct: pct.max(0.0) as u32,
@@ -180,6 +186,7 @@ impl Row {
     fn error(provider: &str, message: &str) -> Row {
         Row {
             provider: provider.into(),
+            account: String::new(),
             plan: String::new(),
             window: String::new(),
             pct: 0,
@@ -187,12 +194,18 @@ impl Row {
             error: Some(message.into()),
         }
     }
+
+    fn of(self, account: &str) -> Row {
+        Row { account: account.into(), ..self }
+    }
 }
 
-/// A provider as the surfaces draw it: 5h over weekly over monthly.
+/// One account of a provider as the surfaces draw it: 5h over weekly over
+/// monthly.
 pub struct Agent {
     pub key: &'static str,
-    pub title: &'static str,
+    pub account: String,
+    pub title: String,
     pub plan: String,
     pub five: Option<Row>,
     pub week: Option<Row>,
@@ -207,27 +220,67 @@ impl Agent {
     }
 }
 
+/// An agent per account, in `AGENTS` order; a provider's accounts in the
+/// order their rows came, which puts the default first.
 pub fn agents(rows: &[Row]) -> Vec<Agent> {
-    crate::settings::AGENTS
-        .into_iter()
-        .filter_map(|(key, title)| {
-            let mine = || rows.iter().filter(move |r| r.provider == key);
+    let mut out = vec![];
+    for (key, title) in crate::settings::AGENTS {
+        let mut accounts: Vec<&str> = vec![];
+        for r in rows.iter().filter(|r| r.provider == key) {
+            if !accounts.contains(&r.account.as_str()) {
+                accounts.push(&r.account);
+            }
+        }
+        for account in accounts {
+            let mine = || rows.iter().filter(move |r| r.provider == key && r.account == account);
             // the first row wins: Codex lists its main limit before per-model ones
             let find = |prefixes: &[&str]| {
                 mine().find(|r| r.error.is_none() && prefixes.iter().any(|p| r.window.starts_with(p))).cloned()
             };
             let agent = Agent {
                 key,
-                title,
+                account: account.into(),
+                title: if account.is_empty() { title.into() } else { account_title(account) },
                 plan: mine().find(|r| !r.plan.is_empty()).map(|r| r.plan.clone()).unwrap_or_default(),
                 five: find(&["5h"]),
                 week: find(&["7d", "weekly"]),
                 month: find(&["30d", "monthly", "1mo"]),
                 error: mine().find_map(|r| r.error.clone()),
             };
-            (agent.windows().iter().any(|w| w.is_some()) || agent.error.is_some()).then_some(agent)
-        })
-        .collect()
+            if agent.windows().iter().any(|w| w.is_some()) || agent.error.is_some() {
+                out.push(agent);
+            }
+        }
+    }
+    // two dirs with one name (~/.claude-2, ~/work/.claude-2) go by their paths
+    let titles: Vec<String> = out.iter().map(|a| a.title.clone()).collect();
+    for a in out.iter_mut().filter(|a| !a.account.is_empty()) {
+        if titles.iter().filter(|t| **t == a.title).count() > 1 {
+            a.title = tilde(&a.account);
+        }
+    }
+    out
+}
+
+/// A path as it reads under the home directory.
+fn tilde(dir: &str) -> String {
+    let home = home();
+    match Path::new(dir).strip_prefix(&home) {
+        Ok(rest) if !home.as_os_str().is_empty() => format!("~/{}", rest.display()),
+        _ => dir.to_string(),
+    }
+}
+
+/// A second account's name, from its config dir: `~/.claude-2` is Claude-2,
+/// `~/.claude-work` Claude-work, `~/work` Claude work. A dir named like the
+/// default shows its path instead, and so do two dirs with one name.
+pub fn account_title(dir: &str) -> String {
+    let name = Path::new(dir).file_name().map_or(String::new(), |n| n.to_string_lossy().trim_start_matches('.').to_string());
+    match name.get(..6) {
+        _ if name.is_empty() || name.eq_ignore_ascii_case("claude") => tilde(dir),
+        Some(head) if head.eq_ignore_ascii_case("claude") => format!("Claude{}", &name[6..]),
+        _ => format!("Claude {name}"),
+    }
 }
 
 // ── collectors ──
@@ -346,24 +399,103 @@ fn codex_rows(account: &Value, result: &Value) -> Vec<Row> {
     rows
 }
 
-fn claude_token() -> Option<String> {
-    if let Ok(token) = std::env::var("CLAUDE_CODE_OAUTH_TOKEN") {
-        return Some(token);
+// ── claude: one login per config dir ──
+
+/// The config dir of a Claude account: CLAUDE_CONFIG_DIR as the account's
+/// sessions see it, or ~/.claude for the default ("").
+fn claude_dir(account: &str) -> PathBuf {
+    if account.is_empty() { home().join(".claude") } else { PathBuf::from(account) }
+}
+
+/// The keychain entry Claude Code keeps an account's login under: its own
+/// name for the default, and with CLAUDE_CONFIG_DIR set, that name and the
+/// first 8 hex digits of the dir's sha256.
+// ponytail: Claude NFC-normalizes the dir first; a non-ASCII path in a
+// decomposed form would hash differently here
+fn keychain_service(account: &str) -> String {
+    const NAME: &str = "Claude Code-credentials";
+    if account.is_empty() {
+        return NAME.into();
+    }
+    let digest = ring::digest::digest(&ring::digest::SHA256, account.as_bytes());
+    let hex: String = digest.as_ref()[..4].iter().map(|b| format!("{b:02x}")).collect();
+    format!("{NAME}-{hex}")
+}
+
+fn claude_token(account: &str) -> Option<String> {
+    if account.is_empty() {
+        if let Ok(token) = std::env::var("CLAUDE_CODE_OAUTH_TOKEN") {
+            return Some(token);
+        }
     }
     let from = |blob: &str| {
         serde_json::from_str::<Value>(blob).ok()?["claudeAiOauth"]["accessToken"].as_str().map(String::from)
     };
-    if let Some(token) = fs::read_to_string(home().join(".claude/.credentials.json")).ok().and_then(|b| from(&b)) {
+    let file = claude_dir(account).join(".credentials.json");
+    if let Some(token) = fs::read_to_string(file).ok().and_then(|b| from(&b)) {
         return Some(token);
     }
+    let service = keychain_service(account);
     let keyring: [(&str, &[&str]); 2] = [
-        ("secret-tool", &["lookup", "service", "Claude Code-credentials"]),
-        ("security", &["find-generic-password", "-s", "Claude Code-credentials", "-w"]),
+        ("secret-tool", &["lookup", "service", &service]),
+        ("security", &["find-generic-password", "-s", &service, "-w"]),
     ];
     keyring.iter().find_map(|(bin, args)| {
         let out = detached(&on_path(bin)?).args(*args).output().ok()?;
         from(String::from_utf8_lossy(&out.stdout).trim())
     })
+}
+
+/// `~/` in a dir from the settings, as the shell would have expanded it.
+fn expand(dir: &str) -> String {
+    match dir.strip_prefix("~/") {
+        Some(rest) => home().join(rest).to_string_lossy().into_owned(),
+        None => dir.to_string(),
+    }
+}
+
+fn seen_path() -> PathBuf {
+    state_dir().join("claude-accounts.json")
+}
+
+fn seen() -> Vec<String> {
+    let text = fs::read_to_string(seen_path()).unwrap_or_default();
+    serde_json::from_str(&text).unwrap_or_default()
+}
+
+/// Notes a config dir a Claude session ran with, so the views show its
+/// account from then on.
+pub fn saw_claude_account(dir: &str) {
+    let mut all = seen();
+    if dir.is_empty() || all.iter().any(|d| d == dir) {
+        return;
+    }
+    all.push(dir.into());
+    let _ = write_atomic(&seen_path(), json!(all).to_string().as_bytes());
+}
+
+/// The default account, then each config dir a session ran with, this
+/// process runs with, or the settings list — once each, and only while the
+/// dir is there. The first spelling of a dir wins: it is the one a session
+/// used, and the keychain entry is named after that spelling.
+pub fn claude_accounts() -> Vec<String> {
+    let mut found: Vec<String> = seen();
+    found.extend(std::env::var("CLAUDE_CONFIG_DIR").ok());
+    found.extend(crate::settings::load().claude_dirs.iter().map(|d| expand(d)));
+    distinct_dirs(found)
+}
+
+fn distinct_dirs(dirs: Vec<String>) -> Vec<String> {
+    let mut out = vec![String::new()];
+    let mut real: Vec<PathBuf> = vec![];
+    for dir in dirs.into_iter().map(|d| d.trim().to_string()).filter(|d| !d.is_empty()) {
+        let Ok(canon) = fs::canonicalize(&dir) else { continue };
+        if canon.is_dir() && !real.contains(&canon) {
+            real.push(canon);
+            out.push(dir);
+        }
+    }
+    out
 }
 
 fn mtime(path: &Path) -> i64 {
@@ -379,41 +511,39 @@ fn pct(window: &Value) -> Option<f64> {
 }
 
 /// Whether a usage payload has a 5h or weekly window the dock can draw.
-fn has_windows(body: &str) -> bool {
-    serde_json::from_str::<Value>(body).is_ok_and(|v| pct(&v["five_hour"]).or(pct(&v["seven_day"])).is_some())
+fn has_windows(usage: &Value) -> bool {
+    pct(&usage["five_hour"]).or(pct(&usage["seven_day"])).is_some()
+}
+
+/// An account's cached usage and back-off files; the default keeps the
+/// names it had before there were accounts.
+fn claude_files(state: &Path, account: &str) -> (PathBuf, PathBuf) {
+    let tag = match account {
+        "" => String::new(),
+        a => format!("-{}", &keychain_service(a)["Claude Code-credentials-".len()..]),
+    };
+    (state.join(format!("claude-usage{tag}.json")), state.join(format!("claude-backoff{tag}")))
+}
+
+fn read_usage(path: &Path) -> Option<Value> {
+    serde_json::from_str::<Value>(&fs::read_to_string(path).ok()?).ok().filter(has_windows)
 }
 
 /// A cache's mtime, or 0 when it has nothing to draw, so a real one always
 /// replaces it and it never holds off a refresh.
 fn usable_mtime(path: &Path) -> i64 {
-    if fs::read_to_string(path).is_ok_and(|b| has_windows(&b)) { mtime(path) } else { 0 }
+    if read_usage(path).is_some() { mtime(path) } else { 0 }
 }
 
-/// The Claude usage payload, refreshed when older than HERDR_PACER_CLAUDE_REFRESH.
-fn claude_usage(state: &Path) -> Option<Value> {
-    let cache = state.join("claude-usage.json");
-    let backoff = state.join("claude-backoff");
-    // cc-pacer keeps the same payload warm while any Claude session is open
-    // our uid is the owner of our own state directory
-    let uid = fs::metadata(state).ok().map(|m| std::os::unix::fs::MetadataExt::uid(&m));
-    if let Some(dirs) = uid.and_then(|uid| fs::read_dir(format!("/tmp/cc-pacer-{uid}")).ok()) {
-        // not every cache there is real: cc-pacer's install preview leaves a
-        // sample one with no windows in it, so only a payload with them counts
-        let ours = usable_mtime(&cache);
-        let newest = dirs
-            .filter_map(|d| Some(d.ok()?.path().join("usage-cache.json")))
-            .filter(|p| p.is_file() && mtime(p) > ours)
-            .filter_map(|p| Some((mtime(&p), fs::read_to_string(&p).ok()?)))
-            .filter(|(_, body)| has_windows(body))
-            .max_by_key(|(t, _)| *t);
-        if let Some((_, body)) = newest {
-            let _ = write_atomic(&cache, body.as_bytes());
-        }
-    }
+/// The account's usage payload, refreshed when older than
+/// HERDR_PACER_CLAUDE_REFRESH. A running session keeps it fresh for free
+/// (`claude_from_statusline`), so the request is for accounts no session is on.
+fn claude_usage(state: &Path, account: &str) -> Option<Value> {
+    let (cache, backoff) = claude_files(state, account);
     let refresh: i64 = env_or(&["HERDR_PACER_CLAUDE_REFRESH"], "300").parse().unwrap_or(300);
     let backoff_until: i64 = fs::read_to_string(&backoff).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0);
     if now() - usable_mtime(&cache) > refresh && now() > backoff_until {
-        if let Some(token) = claude_token() {
+        if let Some(token) = claude_token(account) {
             let fresh = ureq::get("https://api.anthropic.com/api/oauth/usage")
                 .timeout(Duration::from_secs(5))
                 .set("Authorization", &format!("Bearer {token}"))
@@ -423,7 +553,7 @@ fn claude_usage(state: &Path) -> Option<Value> {
                 .call()
                 .ok()
                 .and_then(|r| r.into_string().ok())
-                .filter(|body| has_windows(body));
+                .filter(|body| serde_json::from_str::<Value>(body).is_ok_and(|v| has_windows(&v)));
             match fresh {
                 Some(body) => {
                     let _ = write_atomic(&cache, body.as_bytes());
@@ -436,31 +566,84 @@ fn claude_usage(state: &Path) -> Option<Value> {
             }
         }
     }
-    serde_json::from_str(&fs::read_to_string(&cache).ok()?).ok()
+    read_usage(&cache)
 }
 
-fn claude(state: &Path) -> Vec<Row> {
+/// An account's windows from its payload, flagged when it is `age` old.
+fn claude_rows(account: &str, usage: &Value, age: i64) -> Vec<Row> {
     const KEY: &str = "claude";
-    let usage = claude_usage(state).filter(|u| pct(&u["five_hour"]).or(pct(&u["seven_day"])).is_some());
-    let Some(usage) = usage else {
-        return match on_path("claude") {
-            Some(_) => vec![Row::error(KEY, "no usage yet — sign in to Claude Code")],
-            None => vec![],
-        };
-    };
     let mut rows = vec![];
-    let age = now() - mtime(&state.join("claude-usage.json"));
     let max_age: i64 = env_or(&["HERDR_USAGE_CLAUDE_MAX_AGE"], "900").parse().unwrap_or(900);
     if age > max_age {
-        rows.push(Row::error(KEY, &format!("usage {} old", duration(age))));
+        rows.push(Row::error(KEY, &format!("usage {} old", duration(age))).of(account));
     }
     for (label, key) in [("5h", "five_hour"), ("7d", "seven_day")] {
         let d = &usage[key];
         if let Some(pct) = pct(d) {
-            rows.push(Row::window(KEY, "", label.into(), pct.round(), epoch(&d["resets_at"])));
+            rows.push(Row::window(KEY, "", label.into(), pct.round(), epoch(&d["resets_at"])).of(account));
         }
     }
     rows
+}
+
+/// Every account's rows. One that is not signed in has none; the default
+/// says so only while no other account has any.
+fn claude(state: &Path) -> Vec<Row> {
+    let mut rows = vec![];
+    for account in claude_accounts() {
+        if let Some(usage) = claude_usage(state, &account) {
+            let age = now() - mtime(&claude_files(state, &account).0);
+            rows.extend(claude_rows(&account, &usage, age));
+        }
+    }
+    if rows.is_empty() && on_path("claude").is_some() {
+        rows.push(Row::error("claude", "no usage yet — sign in to Claude Code"));
+    }
+    rows
+}
+
+/// The 5h and weekly windows Claude Code hands its statusLine, kept as the
+/// account's cache: the session paid for them, and no other request is
+/// needed while one is open. The account's rows, when the payload has any.
+pub fn claude_from_statusline(account: &str, rate_limits: &Value) -> Option<Vec<Row>> {
+    saw_claude_account(account);
+    let cache = claude_files(&state_dir(), account).0;
+    let cached = read_usage(&cache).unwrap_or_else(|| json!({}));
+    let (usage, newer) = merge_windows(&cached, rate_limits, now());
+    if newer {
+        let _ = write_atomic(&cache, usage.to_string().as_bytes());
+    }
+    has_windows(&usage).then(|| claude_rows(account, &usage, now() - if newer { now() } else { mtime(&cache) }))
+}
+
+/// The payload's windows laid over the cached ones, and whether any was
+/// newer. The payload is the session's last API answer, which an idle session
+/// hands over again and again, so a window counts as newer only when it
+/// carries news: a later reset, or within the same window more use — use
+/// only rises until the window resets. A window that has already reset is
+/// dropped, from either side.
+fn merge_windows(cached: &Value, payload: &Value, now: i64) -> (Value, bool) {
+    let mut usage = cached.clone();
+    let mut newer = false;
+    for key in ["five_hour", "seven_day"] {
+        if epoch(&cached[key]["resets_at"]).is_some_and(|r| r <= now) {
+            usage[key] = Value::Null;
+        }
+        let (old, new) = (&cached[key], &payload[key]);
+        let (Some(used), Some(resets)) = (pct(new), epoch(&new["resets_at"])) else { continue };
+        let old_resets = epoch(&old["resets_at"]).filter(|&r| r > now);
+        let news = match old_resets {
+            _ if resets <= now => false,
+            Some(r) if r == resets => pct(old).is_none_or(|o| used > o),
+            Some(r) => resets > r,
+            None => true,
+        };
+        if news {
+            usage[key] = new.clone();
+            newer = true;
+        }
+    }
+    (usage, newer)
 }
 
 fn opencode_go() -> Vec<Row> {
@@ -512,7 +695,7 @@ pub fn refresh_seconds() -> i64 {
     env_or(&["HERDR_USAGE_REFRESH_SECONDS", "HERDR_PACER_REFRESH_SECONDS"], "60").parse().unwrap_or(60)
 }
 
-fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let tmp = path.with_extension("tmp");
     fs::write(&tmp, bytes)?;
     fs::rename(tmp, path)
@@ -524,6 +707,7 @@ pub fn load() -> Vec<Row> {
     rows.iter()
         .map(|r| Row {
             provider: r["provider"].as_str().unwrap_or_default().into(),
+            account: r["account"].as_str().unwrap_or_default().into(),
             plan: r["plan"].as_str().unwrap_or_default().into(),
             window: r["window"].as_str().unwrap_or_default().into(),
             pct: r["pct"].as_u64().unwrap_or(0) as u32,
@@ -557,7 +741,7 @@ pub fn fetch(force: bool) {
     let json: Vec<Value> = rows
         .iter()
         .map(|r| {
-            json!({ "provider": r.provider, "plan": r.plan, "window": r.window,
+            json!({ "provider": r.provider, "account": r.account, "plan": r.plan, "window": r.window,
                     "pct": r.pct, "resets": r.resets, "error": r.error })
         })
         .collect();
@@ -594,10 +778,84 @@ mod tests {
 
     #[test]
     fn only_payloads_with_windows_count() {
-        assert!(has_windows(r#"{"five_hour":{"utilization":5.0},"seven_day":null}"#));
-        assert!(!has_windows(r#"{"extra_usage":{"is_enabled":true,"utilization":80}}"#), "cc-pacer's preview sample");
-        assert!(!has_windows(r#"{"five_hour":{},"seven_day":false}"#), "nothing to draw");
-        assert!(!has_windows("not json"));
+        assert!(has_windows(&json!({"five_hour": {"utilization": 5.0}, "seven_day": null})));
+        assert!(has_windows(&json!({"seven_day": {"used_percentage": 40}})), "as the statusLine hands it over");
+        assert!(!has_windows(&json!({"extra_usage": {"is_enabled": true, "utilization": 80}})), "cc-pacer's preview sample");
+        assert!(!has_windows(&json!({"five_hour": {}, "seven_day": false})), "nothing to draw");
+    }
+
+    #[test]
+    fn each_account_has_its_own_keychain_entry_and_files() {
+        assert_eq!(keychain_service(""), "Claude Code-credentials");
+        // what Claude Code names it: sha256 of CLAUDE_CONFIG_DIR, 8 hex digits
+        assert_eq!(keychain_service("/u/.claude-2"), "Claude Code-credentials-7570ccf5");
+        let state = Path::new("/s");
+        assert_eq!(claude_files(state, "").0, state.join("claude-usage.json"), "the default keeps its old name");
+        assert_eq!(claude_files(state, "/u/.claude-2").1, state.join("claude-backoff-7570ccf5"));
+        assert_eq!(claude_dir("/u/.claude-2"), PathBuf::from("/u/.claude-2"));
+    }
+
+    #[test]
+    fn a_statusline_snapshot_counts_only_with_news() {
+        let (now, at) = (1_000_000, 1_000_000 + 3600);
+        let win = |used: u32, resets: i64| json!({ "used_percentage": used, "resets_at": resets });
+        let cached = json!({ "five_hour": win(40, at), "seven_day": win(10, at * 2) });
+        let merged = |payload: Value| merge_windows(&cached, &payload, now);
+        assert!(!merged(json!({ "five_hour": win(40, at) })).1, "the same answer again, from an idle session");
+        assert!(!merged(json!({ "five_hour": win(38, at) })).1, "less use in one window is an older answer");
+        let (usage, newer) = merged(json!({ "five_hour": win(45, at), "seven_day": win(9, at * 2) }));
+        assert!(newer);
+        assert_eq!((pct(&usage["five_hour"]), pct(&usage["seven_day"])), (Some(45.0), Some(10.0)));
+        assert!(merged(json!({ "five_hour": win(2, at + 18000) })).1, "a new window after a reset");
+        assert!(!merged(json!({ "five_hour": win(90, now - 1) })).1, "a window that has already reset");
+        let (usage, _) = merge_windows(&cached, &json!({}), at);
+        assert!(usage["five_hour"].is_null() && pct(&usage["seven_day"]) == Some(10.0), "nor is a cached one kept");
+        let (fresh, newer) = merge_windows(&json!({}), &json!({ "seven_day": win(15, at) }), now);
+        assert!(newer && pct(&fresh["seven_day"]) == Some(15.0) && fresh["five_hour"].is_null());
+    }
+
+    #[test]
+    fn account_titles() {
+        assert_eq!(account_title("/u/.claude-2"), "Claude-2");
+        assert_eq!(account_title("/u/.config/claude-work/"), "Claude-work");
+        assert_eq!(account_title("/u/personal"), "Claude personal");
+        assert_eq!(account_title("/srv/other/.claude"), "/srv/other/.claude", "named like the default");
+    }
+
+    #[test]
+    fn accounts_are_distinct_dirs_that_exist() {
+        let dir = std::env::temp_dir().join(format!("herdr-pacer-accounts-{}", std::process::id()));
+        let two = dir.join(".claude-2");
+        fs::create_dir_all(&two).unwrap();
+        let spelled = |p: &Path| p.to_string_lossy().into_owned();
+        let found = distinct_dirs(vec![
+            spelled(&two),
+            format!("{}/", spelled(&two)), // the same dir, spelled otherwise
+            spelled(&dir.join("gone")),
+            " ".into(),
+        ]);
+        assert_eq!(found, ["".to_string(), spelled(&two)], "the default, then the first spelling");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn accounts_are_drawn_apart() {
+        let usage = json!({ "five_hour": { "used_percentage": 12.4, "resets_at": 1790000000 },
+                            "seven_day": { "used_percentage": 40 } });
+        let mut rows = claude_rows("", &json!({ "five_hour": { "utilization": 90 } }), 0);
+        rows.extend(claude_rows("/u/.claude-2", &usage, 0));
+        let all = agents(&rows);
+        let shown: Vec<_> = all.iter().map(|a| (a.title.as_str(), a.five.as_ref().map(|r| r.pct))).collect();
+        assert_eq!(shown, [("Claude", Some(90)), ("Claude-2", Some(12))]);
+        assert_eq!(all[1].five.as_ref().unwrap().resets, Some(1790000000));
+        assert_eq!(all[1].week.as_ref().map(|r| r.pct), Some(40));
+        assert!(all[0].week.is_none(), "the default's windows are its own");
+        let twin = claude_rows("/u/work/.claude-2", &usage, 0);
+        let titles: Vec<_> = agents(&[rows.clone(), twin].concat()).into_iter().map(|a| a.title).collect();
+        assert_eq!(titles, ["Claude", "/u/.claude-2", "/u/work/.claude-2"], "one name twice: the paths");
+        let stale = claude_rows("/u/.claude-2", &usage, 3600);
+        assert_eq!(stale[0].error.as_deref(), Some("usage 1h00m old"));
+        assert_eq!(agents(&stale)[0].account, "/u/.claude-2");
     }
 
     #[test]
