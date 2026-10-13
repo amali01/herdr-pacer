@@ -235,7 +235,7 @@ pub fn statusline() -> i32 {
     let _ = std::io::stdin().read_to_string(&mut payload);
     let v = serde_json::from_str::<Value>(&payload).unwrap_or_default();
     let pct = v["context_window"]["used_percentage"].as_f64().map(|p| p.round().max(0.0) as u32);
-    let account = std::env::var("CLAUDE_CONFIG_DIR").unwrap_or_default();
+    let account = usage::claude_account(&std::env::var("CLAUDE_CONFIG_DIR").unwrap_or_default());
     let inner = std::env::var("HERDR_PACER_STATUSLINE").unwrap_or_default();
     let code = if inner.is_empty() {
         println!("ctx {}%", pct.unwrap_or(0));

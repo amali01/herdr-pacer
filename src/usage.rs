@@ -482,12 +482,14 @@ pub fn claude_accounts() -> Vec<String> {
     let mut found: Vec<String> = seen();
     found.extend(std::env::var("CLAUDE_CONFIG_DIR").ok());
     found.extend(crate::settings::load().claude_dirs.iter().map(|d| expand(d)));
-    distinct_dirs(found)
+    distinct_dirs(&claude_dir(""), found)
 }
 
-fn distinct_dirs(dirs: Vec<String>) -> Vec<String> {
+/// The default's own dir counts as seen from the start, so ~/.claude set by
+/// name (in CLAUDE_CONFIG_DIR or the settings) stays the one default account.
+fn distinct_dirs(default: &Path, dirs: Vec<String>) -> Vec<String> {
     let mut out = vec![String::new()];
-    let mut real: Vec<PathBuf> = vec![];
+    let mut real: Vec<PathBuf> = fs::canonicalize(default).into_iter().collect();
     for dir in dirs.into_iter().map(|d| d.trim().to_string()).filter(|d| !d.is_empty()) {
         let Ok(canon) = fs::canonicalize(&dir) else { continue };
         if canon.is_dir() && !real.contains(&canon) {
@@ -496,6 +498,17 @@ fn distinct_dirs(dirs: Vec<String>) -> Vec<String> {
         }
     }
     out
+}
+
+/// A session's account: "" when its CLAUDE_CONFIG_DIR is ~/.claude however
+/// it is spelled, since that is the default login and not a second one.
+pub fn claude_account(dir: &str) -> String {
+    account_in(&claude_dir(""), dir)
+}
+
+fn account_in(default: &Path, dir: &str) -> String {
+    let real = |p: &Path| fs::canonicalize(p).ok();
+    if real(Path::new(dir.trim())).is_some_and(|d| Some(d) == real(default)) { String::new() } else { dir.into() }
 }
 
 fn mtime(path: &Path) -> i64 {
@@ -828,13 +841,33 @@ mod tests {
         let two = dir.join(".claude-2");
         fs::create_dir_all(&two).unwrap();
         let spelled = |p: &Path| p.to_string_lossy().into_owned();
-        let found = distinct_dirs(vec![
+        let found = distinct_dirs(&dir.join(".claude"), vec![
             spelled(&two),
             format!("{}/", spelled(&two)), // the same dir, spelled otherwise
             spelled(&dir.join("gone")),
             " ".into(),
         ]);
         assert_eq!(found, ["".to_string(), spelled(&two)], "the default, then the first spelling");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_default_dir_set_by_name_is_the_default_account() {
+        let dir = std::env::temp_dir().join(format!("herdr-pacer-default-{}", std::process::id()));
+        let (default, two) = (dir.join(".claude"), dir.join(".claude-2"));
+        fs::create_dir_all(&default).unwrap();
+        fs::create_dir_all(&two).unwrap();
+        std::os::unix::fs::symlink(&default, dir.join("link")).unwrap();
+        let spelled = |p: &Path| p.to_string_lossy().into_owned();
+        let named = [spelled(&default), format!("{}/", spelled(&default)), spelled(&dir.join("link"))];
+        let mut dirs = named.to_vec();
+        dirs.push(spelled(&two));
+        assert_eq!(distinct_dirs(&default, dirs), ["".to_string(), spelled(&two)], "listed once, as the default");
+        for d in &named {
+            assert_eq!(account_in(&default, d), "", "{d} is the default's login");
+        }
+        assert_eq!(account_in(&default, &spelled(&two)), spelled(&two));
+        assert_eq!(account_in(&default, ""), "");
         let _ = fs::remove_dir_all(&dir);
     }
 
