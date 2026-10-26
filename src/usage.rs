@@ -428,22 +428,39 @@ fn claude_token(account: &str) -> Option<String> {
             return Some(token);
         }
     }
-    let from = |blob: &str| {
-        serde_json::from_str::<Value>(blob).ok()?["claudeAiOauth"]["accessToken"].as_str().map(String::from)
-    };
     let file = claude_dir(account).join(".credentials.json");
-    if let Some(token) = fs::read_to_string(file).ok().and_then(|b| from(&b)) {
+    if let Some(token) = fs::read_to_string(file).ok().and_then(|b| freshest([b])) {
         return Some(token);
     }
-    let service = keychain_service(account);
-    let keyring: [(&str, &[&str]); 2] = [
-        ("secret-tool", &["lookup", "service", &service]),
-        ("security", &["find-generic-password", "-s", &service, "-w"]),
-    ];
-    keyring.iter().find_map(|(bin, args)| {
-        let out = detached(&on_path(bin)?).args(*args).output().ok()?;
-        from(String::from_utf8_lossy(&out.stdout).trim())
-    })
+    // Claude Code hashes CLAUDE_CONFIG_DIR into the entry's name even when it
+    // is ~/.claude, so the default's login can sit under any spelling of it
+    let mut services = vec![keychain_service(account)];
+    if account.is_empty() {
+        services.extend(default_spellings(&claude_dir(""), named_dirs()).iter().map(|d| keychain_service(d)));
+    }
+    freshest(services.iter().filter_map(|service| {
+        let keyring: [(&str, &[&str]); 2] = [
+            ("secret-tool", &["lookup", "service", service]),
+            ("security", &["find-generic-password", "-s", service, "-w"]),
+        ];
+        keyring.iter().find_map(|(bin, args)| {
+            let out = detached(&on_path(bin)?).args(*args).output().ok()?;
+            Some(String::from_utf8_lossy(&out.stdout).trim().to_string()).filter(|b| !b.is_empty())
+        })
+    }))
+}
+
+/// The access token of the login that expires last: an entry left from
+/// before can still hold an old one.
+fn freshest(blobs: impl IntoIterator<Item = String>) -> Option<String> {
+    blobs
+        .into_iter()
+        .filter_map(|blob| {
+            let oauth = serde_json::from_str::<Value>(&blob).ok()?["claudeAiOauth"].take();
+            Some((oauth["accessToken"].as_str()?.to_string(), oauth["expiresAt"].as_i64().unwrap_or(0)))
+        })
+        .max_by_key(|(_, expires)| *expires)
+        .map(|(token, _)| token)
 }
 
 /// `~/` in a dir from the settings, as the shell would have expanded it.
@@ -479,10 +496,27 @@ pub fn saw_claude_account(dir: &str) {
 /// dir is there. The first spelling of a dir wins: it is the one a session
 /// used, and the keychain entry is named after that spelling.
 pub fn claude_accounts() -> Vec<String> {
+    distinct_dirs(&claude_dir(""), named_dirs())
+}
+
+/// Every config dir as it was spelled: by a session, this process or the
+/// settings.
+fn named_dirs() -> Vec<String> {
     let mut found: Vec<String> = seen();
     found.extend(std::env::var("CLAUDE_CONFIG_DIR").ok());
     found.extend(crate::settings::load().claude_dirs.iter().map(|d| expand(d)));
-    distinct_dirs(&claude_dir(""), found)
+    found
+}
+
+/// The spellings of the default's own dir among `dirs`, once each.
+fn default_spellings(default: &Path, dirs: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    for dir in dirs {
+        if !dir.trim().is_empty() && account_in(default, &dir).is_empty() && !out.contains(&dir) {
+            out.push(dir);
+        }
+    }
+    out
 }
 
 /// The default's own dir counts as seen from the start, so ~/.claude set by
@@ -619,7 +653,6 @@ fn claude(state: &Path) -> Vec<Row> {
 /// account's cache: the session paid for them, and no other request is
 /// needed while one is open. The account's rows, when the payload has any.
 pub fn claude_from_statusline(account: &str, rate_limits: &Value) -> Option<Vec<Row>> {
-    saw_claude_account(account);
     let cache = claude_files(&state_dir(), account).0;
     let cached = read_usage(&cache).unwrap_or_else(|| json!({}));
     let (usage, newer) = merge_windows(&cached, rate_limits, now());
@@ -868,7 +901,19 @@ mod tests {
         }
         assert_eq!(account_in(&default, &spelled(&two)), spelled(&two));
         assert_eq!(account_in(&default, ""), "");
+        let mut again = named.to_vec();
+        again.extend([spelled(&two), spelled(&default), " ".into()]);
+        assert_eq!(default_spellings(&default, again), named, "each spelling keeps its own keychain entry");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_login_that_expires_last_wins() {
+        let login = |token: &str, expires: i64| json!({ "claudeAiOauth": { "accessToken": token, "expiresAt": expires } }).to_string();
+        let blobs = [login("old", 1), "not json".into(), login("new", 9), login("mid", 5)];
+        assert_eq!(freshest(blobs).as_deref(), Some("new"));
+        assert_eq!(freshest([r#"{"claudeAiOauth":{"accessToken":"t"}}"#.to_string()]).as_deref(), Some("t"), "no expiry still counts");
+        assert_eq!(freshest(["{}".to_string()]), None);
     }
 
     #[test]
