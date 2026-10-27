@@ -77,6 +77,10 @@ pub fn migrate(force: bool) {
     if lock.try_lock().is_err() {
         return; // another hook is on it
     }
+    // one that finished while this hook waited to start has done it all
+    if !force && fs::read_to_string(stamp()).is_ok_and(|s| s.trim() == now) {
+        return;
+    }
     clean(&usage::state_dir(), &old_state_dir(), &settings::dir());
     // not retried on every hook (each would restart the docks): said once
     let mut failed: Vec<String> = context::claude_hook("refresh").err().into_iter().collect();

@@ -413,19 +413,48 @@ fn wrapped_inner(command: &str) -> Option<String> {
 /// changed since it was read is left alone: Claude or the user saved it
 /// meanwhile, and writing ours would lose that. The backup, if one was made.
 fn save_settings(path: &std::path::Path, read: &str, body: &str) -> Result<Option<PathBuf>, String> {
-    let real = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let now = std::fs::read_to_string(&real).unwrap_or_else(|_| "{}".into());
-    if now != read {
-        return Err(format!("{}: changed while herdr-pacer was editing it; nothing written, run `herdr-pacer claude-hook install` again", path.display()));
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let fail = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
+    let real = resolve(path);
+    // our own writers take turns; the check is made again just before the swap
+    let lock = std::fs::File::create(usage::state_dir().join("claude-settings.lock")).map_err(|e| fail(&e))?;
+    lock.lock().map_err(|e| fail(&e))?;
+    let changed = || std::fs::read_to_string(&real).unwrap_or_else(|_| "{}".into()) != read;
+    let refuse = || format!("{}: changed while herdr-pacer was editing it; nothing written, run `herdr-pacer claude-hook install` again", path.display());
+    if changed() {
+        return Err(refuse());
     }
     let saved = real.exists().then(|| backup(&real)).flatten();
-    let mode = std::fs::metadata(&real).map(|m| m.permissions());
-    usage::write_atomic(&real, body.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))?;
-    // a private file stays private
-    if let Ok(mode) = mode {
-        let _ = std::fs::set_permissions(&real, mode);
-    }
+    // made with the file's own mode, so a private file is never readable on the way
+    let mode = std::fs::metadata(&real).map_or(0o600, |m| m.permissions().mode() & 0o7777);
+    let name = real.file_name().map_or_else(Default::default, |n| n.to_string_lossy().into_owned());
+    let tmp = real.with_file_name(format!(".{name}.herdr-pacer-{}.tmp", std::process::id()));
+    let swap = || -> std::io::Result<()> {
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(mode).open(&tmp)?;
+        file.write_all(body.as_bytes())?;
+        file.sync_all()?;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode))?;
+        if changed() {
+            return Err(std::io::Error::other(refuse()));
+        }
+        std::fs::rename(&tmp, &real)
+    };
+    swap().inspect_err(|_| drop(std::fs::remove_file(&tmp))).map_err(|e| fail(&e))?;
     Ok(saved)
+}
+
+/// The file a path names, through its links, even one whose file is not
+/// there yet: written through, a link stays a link.
+fn resolve(path: &std::path::Path) -> PathBuf {
+    let mut at = path.to_path_buf();
+    for _ in 0..16 {
+        match std::fs::read_link(&at) {
+            Ok(to) => at = at.parent().map_or(to.clone(), |dir| dir.join(&to)),
+            Err(_) => break,
+        }
+    }
+    at.canonicalize().unwrap_or(at)
 }
 
 pub fn backup(path: &std::path::Path) -> Option<PathBuf> {
@@ -717,11 +746,20 @@ mod tests {
         std::fs::write(&real, "{}").unwrap();
         let link = dir.join("b/settings.json");
         std::os::unix::fs::symlink(&real, &link).unwrap();
+        std::fs::set_permissions(&real, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
         save_settings(&link, "{}", "{\"x\": 1}\n").unwrap();
+        assert_eq!(std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&real).unwrap().permissions()) & 0o777, 0o600, "a private file stays private");
         assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink(), "the link stays a link");
         assert_eq!(std::fs::read_to_string(&real).unwrap(), "{\"x\": 1}\n");
         assert!(save_settings(&link, "{}", "{}").is_err(), "a file changed since it was read is left alone");
         assert_eq!(std::fs::read_to_string(&real).unwrap(), "{\"x\": 1}\n");
+        // a link to a file not there yet is followed, not replaced
+        let dangling = dir.join("b/next.json");
+        std::os::unix::fs::symlink(dir.join("a/next.json"), &dangling).unwrap();
+        save_settings(&dangling, "{}", "{}\n").unwrap();
+        assert!(std::fs::symlink_metadata(&dangling).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_to_string(dir.join("a/next.json")).unwrap(), "{}\n");
+        assert!(std::fs::read_dir(dir.join("a")).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().ends_with(".tmp")), "no temporary file left");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

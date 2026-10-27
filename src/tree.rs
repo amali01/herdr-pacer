@@ -171,8 +171,9 @@ fn root_names(nodes: &[Node], places: &[Place]) -> Vec<Option<String>> {
 
 /// Every agent's tokens, in agent.list order. Its repo shows unless its name
 /// carries it or its parent shows the same.
-fn draw(nodes: &[Node], places: &[Place]) -> Vec<Map<String, Value>> {
-    let names = root_names(nodes, places);
+/// `names` come from the tree itself, so a flat view (priority order) keeps
+/// them.
+fn draw(nodes: &[Node], places: &[Place], names: Vec<Option<String>>) -> Vec<Map<String, Value>> {
     nodes
         .iter()
         .zip(places)
@@ -268,8 +269,9 @@ pub fn sync() -> herdr::Result<()> {
     }
     let (nodes, agents): (Vec<Node>, Vec<&Value>) = listed.into_iter().unzip();
     let mut places = layout(&nodes);
+    let names = root_names(&nodes, &places);
     // the view follows the order setting both ways, and the subagents toggle
-    if std::fs::read_to_string(view_file()).ok().as_deref() != Some(&view_mode()) {
+    if std::fs::read_to_string(view_file()).ok() != Some(mode_text(view_mode())) {
         let _ = view();
     }
     if priority() {
@@ -277,7 +279,7 @@ pub fn sync() -> herdr::Result<()> {
         places.iter_mut().for_each(|p| *p = Place { key: std::mem::take(&mut p.key), ..Place::default() });
     }
     let mut failed = None;
-    for ((want, node), a) in draw(&nodes, &places).into_iter().zip(&nodes).zip(&agents) {
+    for ((want, node), a) in draw(&nodes, &places, names).into_iter().zip(&nodes).zip(&agents) {
         let changed: Map<String, Value> = want.into_iter().filter(|(k, v)| &a["tokens"][k] != v).collect();
         if node.pane.is_empty() || changed.is_empty() {
             continue;
@@ -348,9 +350,11 @@ pub fn subagent(event: &str) -> Result<(), String> {
     let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut payload);
     let hook: Value = serde_json::from_str(&payload).unwrap_or_default();
     let Some(id) = hook["agent_id"].as_str().filter(|i| !i.is_empty()) else { return Ok(()) };
-    // off until asked for in the settings: it opens a tab; a stop still
-    // closes a view opened while it was on, and costs nothing otherwise
-    if !crate::settings::load().subagent_panes && (start || !subs_of(&pane).contains_key(id)) {
+    // off until asked for in the settings: it opens a tab. Decided under the
+    // lock, so a start that got in before the switch is still seen by its
+    // stop; a stop with nothing to close costs no redraw
+    let on = || crate::settings::load().subagent_panes;
+    if start && !on() {
         return Ok(());
     }
     {
@@ -359,6 +363,9 @@ pub fn subagent(event: &str) -> Result<(), String> {
         let lock = std::fs::File::create(crate::usage::state_dir().join("subagents.lock")).ok();
         let _held = lock.as_ref().map(|f| f.lock());
         let mut subs = subs_of(&pane);
+        if !on() && (start || !subs.contains_key(id)) {
+            return Ok(());
+        }
         let had = subs.get(id).and_then(|v| v["view"].as_str()).map(String::from);
         note(&mut subs, id, if start { hook["agent_type"].as_str() } else { None }, crate::usage::now());
         // a resumed one whose view was closed meanwhile gets a new one
@@ -504,25 +511,32 @@ fn view_file() -> std::path::PathBuf {
     crate::usage::state_dir().join("view")
 }
 
-fn view_mode() -> String {
-    format!("{} {}", if priority() { "priority" } else { "tree" }, if subagents_hidden() { "hidden" } else { "shown" })
+/// The view wanted now: (attention order, subagents hidden).
+fn view_mode() -> (bool, bool) {
+    (priority(), subagents_hidden())
+}
+
+fn mode_text((priority, hidden): (bool, bool)) -> String {
+    format!("{} {}", if priority { "priority" } else { "tree" }, if hidden { "hidden" } else { "shown" })
 }
 
 /// Sorts the Agents view by the tree, or hands the order back to Herdr when
 /// the user picked the attention queue (`agent_panel_sort = "priority"`);
 /// either way leaves Claude's subagents out while they are hidden.
 pub fn view() -> herdr::Result<()> {
-    let set = view_set();
+    // the mode set is the mode kept, read once
+    let mode = view_mode();
+    let set = view_set(mode);
     if set.is_ok() {
-        let _ = std::fs::write(view_file(), view_mode());
+        let _ = std::fs::write(view_file(), mode_text(mode));
     }
     set
 }
 
-fn view_set() -> herdr::Result<()> {
+fn view_set((priority, hidden): (bool, bool)) -> herdr::Result<()> {
     let source = "plugin:herdr-pacer";
-    let filter = subagents_hidden().then(|| json!({ "op": "not", "filter": { "op": "exists", "field": { "token": "pacer_sub" } } }));
-    if priority() {
+    let filter = hidden.then(|| json!({ "op": "not", "filter": { "op": "exists", "field": { "token": "pacer_sub" } } }));
+    if priority {
         return match filter {
             Some(filter) => call("agent.view.set", json!({ "source": source, "label": "subs hidden", "filter": filter })).map(drop),
             None => call("agent.view.clear", json!({ "source": source })).map(drop),
@@ -555,7 +569,7 @@ mod tests {
     /// tokens, a space after its circle (○ here).
     fn drawn(nodes: &[Node]) -> Vec<String> {
         let places = layout(nodes);
-        let mut lines: Vec<(String, String)> = draw(nodes, &places)
+        let mut lines: Vec<(String, String)> = draw(nodes, &places, root_names(nodes, &places))
             .iter()
             .map(|m| {
                 let branch = m["pacer_branch"].as_str().map(|b| format!("{b} · ")).unwrap_or_default();
@@ -681,6 +695,17 @@ mod tests {
             ],
             "alone in its repo, no number; a named one and a worker keep their names"
         );
+    }
+
+    #[test]
+    fn a_flat_view_keeps_the_names_of_the_tree() {
+        let mut nodes = [node("o", "ui-fix", None), node("w", "claude", Some("o"))];
+        nodes[1].named = false;
+        let places = layout(&nodes);
+        let names = root_names(&nodes, &places);
+        let flat: Vec<Place> = places.iter().map(|p| Place { key: p.key.clone(), ..Place::default() }).collect();
+        let maps = draw(&nodes, &flat, names);
+        assert_eq!((maps[0]["pacer_name"].as_str(), maps[1]["pacer_name"].as_str()), (Some("gh-dash orch"), Some("claude")), "the worker stays a worker");
     }
 
     #[test]
