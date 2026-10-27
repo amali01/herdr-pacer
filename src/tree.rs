@@ -468,6 +468,16 @@ pub fn toggle_subagents() -> herdr::Result<()> {
         let _ = flip(!hide);
         return Err(e);
     }
+    // say so: with none running, the list itself shows no change
+    let running = call("agent.list", json!({})).map(|l| l["agents"].as_array().map_or(0, |a| a.iter().filter(|a| a["tokens"]["pacer_sub"].is_string()).count()));
+    let body = match (hide, running.unwrap_or(0)) {
+        (true, 0) => "None running now; new ones stay out of the list, counted on their agent.".to_string(),
+        (true, n) => format!("{n} out of the list, counted on their agents (⁺{n})."),
+        (false, 0) => "None running now; new ones show under their agent.".to_string(),
+        (false, n) => format!("{n} back in the list, under their agents."),
+    };
+    let title = if hide { "Claude subagents hidden" } else { "Claude subagents shown" };
+    let _ = call("notification.show", json!({ "title": title, "body": body }));
     sync()
 }
 
@@ -479,7 +489,7 @@ pub fn view() -> herdr::Result<()> {
     let filter = subagents_hidden().then(|| json!({ "op": "not", "filter": { "op": "exists", "field": { "token": "pacer_sub" } } }));
     if priority() {
         return match filter {
-            Some(filter) => call("agent.view.set", json!({ "source": source, "label": "no subagents", "filter": filter })).map(drop),
+            Some(filter) => call("agent.view.set", json!({ "source": source, "label": "subs hidden", "filter": filter })).map(drop),
             None => call("agent.view.clear", json!({ "source": source })).map(drop),
         };
     }
@@ -487,7 +497,9 @@ pub fn view() -> herdr::Result<()> {
         .into_iter()
         .chain(["workspace_order", "tab_order", "pane_order"].map(|f| json!({ "field": f, "order": "asc" })))
         .collect::<Vec<_>>();
-    call("agent.view.set", json!({ "source": source, "label": "tree", "sort": sort, "filter": filter })).map(drop)
+    // the panel's header names the view: it tells when subagents are hidden
+    let label = if filter.is_some() { "tree, subs hidden" } else { "tree" };
+    call("agent.view.set", json!({ "source": source, "label": label, "sort": sort, "filter": filter })).map(drop)
 }
 
 #[cfg(test)]

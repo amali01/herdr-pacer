@@ -180,7 +180,8 @@ tab with its last one. `claude-hook remove` takes the hooks out again.
 With several reviews running, each spending many subagents, the list gets
 long: the prefix key then `a` (`ctrl+b a`; setup binds it unless the key is
 yours) takes Claude's subagents out of the Agents list, each agent showing
-how many it has (`● claude ⁺⁴`), and puts them back. A session that only
+how many it has (`● claude ⁺⁴`), and puts them back. A toast says
+which, and the panel's header reads `tree, subs hidden` while they are out. A session that only
 uses subagents keeps its own name; `repo orch` is for one that starts
 workers of its own.
 
