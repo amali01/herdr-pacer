@@ -27,9 +27,6 @@ use crate::herdr::{self, call};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 
-/// The rows an agent's subagents take; past the last, a count.
-pub const SUBS: [&str; 3] = ["pacer_sub1", "pacer_sub2", "pacer_sub3"];
-
 struct Node {
     pane: String,
     label: String,
@@ -39,8 +36,6 @@ struct Node {
     repo: Option<String>,
     repo_key: Option<String>,
     account: Option<String>,
-    /// Claude Code's own subagents running inside it, oldest first
-    subs: Vec<String>,
 }
 
 /// An agent's place: the parent it is drawn under, what leads its circle (the
@@ -50,10 +45,6 @@ struct Node {
 struct Place {
     up: Option<usize>,
     head: String,
-    /// what leads a branch under it: its children's and its subagents'
-    cont: String,
-    /// whether agents of its own hang under it, after its subagents
-    children: bool,
     rail: String,
     key: String,
 }
@@ -99,11 +90,11 @@ fn layout(nodes: &[Node]) -> Vec<Place> {
             }
             // under the name: a root's starts where Herdr starts the row
             // its own line runs down from its circle when anything hangs under it
-            let rail = match kids.is_empty() && nodes[n].subs.is_empty() {
+            let rail = match kids.is_empty() {
                 true => cont.clone(),
                 false => format!("{cont}│"),
             };
-            out[n] = Place { up, head: format!("{prefix}{branch}"), cont, children: !kids.is_empty(), rail, key };
+            out[n] = Place { up, head: format!("{prefix}{branch}"), rail, key };
         }
     }
     out
@@ -175,20 +166,6 @@ fn tokens(p: &Place, n: &Node, name: &str, repo: Option<&str>) -> Map<String, Va
     let lines = (!p.rail.is_empty()).then(|| p.rail.replace(' ', "⠀"));
     map.insert("pacer_lines".into(), lines.map_or(Value::Null, Value::from));
     map.insert("pacer_tree_key".into(), p.key.clone().into());
-    // its subagents branch off under its usage, before its own children's entries
-    let mut subs: Vec<String> = n.subs.iter().map(|s| format!("⁺ {s}")).collect();
-    if subs.len() > SUBS.len() {
-        let more = subs.len() - (SUBS.len() - 1);
-        subs.truncate(SUBS.len() - 1);
-        subs.push(format!("⁺ {more} more"));
-    }
-    for (i, token) in SUBS.iter().enumerate() {
-        let line = subs.get(i).map(|s| {
-            let last = i + 1 == subs.len() && !p.children;
-            lead(format!("{}{} {s}", p.cont, if last { "└" } else { "├" }))
-        });
-        map.insert(token.to_string(), line.map_or(Value::Null, Value::from));
-    }
     map
 }
 
@@ -229,12 +206,12 @@ pub fn sync() -> herdr::Result<()> {
             let (repo, repo_key) = repos.get(a["workspace_id"].as_str().unwrap_or_default()).cloned().unzip();
             Node {
                 pane: text(a, "pane_id").unwrap_or_default(),
-                label: text(a, "name").or_else(|| text(a, "agent")).unwrap_or_else(|| "agent".into()),
+                // a subagent's view goes by its task (subview.rs)
+                label: text(&a["tokens"], "pacer_task").or_else(|| text(a, "name")).or_else(|| text(a, "agent")).unwrap_or_else(|| "agent".into()),
                 parent: text(&a["tokens"], "pacer_parent"),
                 repo,
                 repo_key,
                 account: text(a, "display_agent").or_else(|| text(a, "agent")),
-                subs: running(&text(a, "pane_id").unwrap_or_default()),
             }
         })
         .collect();
@@ -248,19 +225,11 @@ pub fn sync() -> herdr::Result<()> {
     }
     let mut failed = None;
     for ((want, node), a) in draw(&nodes, &places).into_iter().zip(&nodes).zip(&agents) {
-        let (subs, changed): (Map<String, Value>, Map<String, Value>) =
-            want.into_iter().filter(|(k, v)| &a["tokens"][k] != v).partition(|(k, _)| SUBS.contains(&k.as_str()));
-        if node.pane.is_empty() || changed.is_empty() && subs.is_empty() {
+        let changed: Map<String, Value> = want.into_iter().filter(|(k, v)| &a["tokens"][k] != v).collect();
+        if node.pane.is_empty() || changed.is_empty() {
             continue;
-        }
-        // a subagent whose stop never comes leaves the sidebar on its own
-        if !subs.is_empty() {
-            let _ = herdr::report_tokens(&node.pane, Value::Object(subs), Some(SUB_TTL as u64 * 1000));
         }
         // a pane that closed since the list fails alone; the rest still update
-        if changed.is_empty() {
-            continue;
-        }
         if let Err(e) = herdr::report_tokens(&node.pane, Value::Object(changed.clone()), None) {
             failed = Some(e);
         } else if changed.contains_key("pacer_lines") {
@@ -275,8 +244,10 @@ pub fn sync() -> herdr::Result<()> {
 //
 // They run inside Claude's own process, so Herdr never lists them. Claude's
 // SubagentStart and SubagentStop hooks (`herdr-pacer subagent start|stop`,
-// which `claude-hook install` adds) keep each pane's running ones in a file,
-// and the tree lists them under their agent.
+// which `claude-hook install` adds) give each one a pane of its own in its
+// workspace's "subagents" tab, a live view of what it does (subview.rs),
+// that Herdr lists as an agent under its parent; it closes when the
+// subagent stops. A file per parent pane keeps which pane is whose.
 
 /// How long a subagent whose stop never came stays listed.
 const SUB_TTL: i64 = 6 * 3600;
@@ -291,14 +262,6 @@ fn subs_of(pane: &str) -> Map<String, Value> {
     std::fs::read_to_string(subs_file(pane)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
 }
 
-/// A pane's running subagents, by type, oldest first.
-fn running(pane: &str) -> Vec<String> {
-    let mut subs: Vec<(i64, String)> =
-        subs_of(pane).values().filter_map(|v| Some((v["at"].as_i64()?, v["type"].as_str()?.to_string()))).collect();
-    subs.sort();
-    subs.into_iter().filter(|s| s.0 > crate::usage::now() - SUB_TTL).map(|s| s.1).collect()
-}
-
 /// A subagent started (with its type) or stopped, in a pane's list. Claude
 /// also starts agents of its own with no type; those are not listed. The
 /// hooks are async, so a short one's stop can come first: it is kept a while
@@ -308,7 +271,8 @@ fn note(subs: &mut Map<String, Value>, id: &str, kind: Option<&str>, now: i64) {
     match kind {
         Some("") => {}
         Some(_) if stopped => drop(subs.remove(id)),
-        Some(kind) => drop(subs.insert(id.into(), json!({ "type": kind, "at": now }))),
+        // Claude starts a subagent again when it resumes: it keeps its pane
+        Some(kind) => drop(subs.entry(id).or_insert_with(|| json!({ "type": kind, "at": now }))),
         None if subs.remove(id).is_some_and(|v| v.get("type").is_some()) => {}
         None => drop(subs.insert(id.into(), json!({ "stopped": now }))),
     }
@@ -331,19 +295,94 @@ pub fn subagent(event: &str) -> Result<(), String> {
     let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut payload);
     let hook: Value = serde_json::from_str(&payload).unwrap_or_default();
     let Some(id) = hook["agent_id"].as_str().filter(|i| !i.is_empty()) else { return Ok(()) };
-    {
-        // parallel subagents start together: one read-modify-write at a time
+    let closing = {
+        // parallel subagents start together: one at a time, so they share
+        // one subagents tab and one file
         let lock = std::fs::File::create(crate::usage::state_dir().join("subagents.lock")).ok();
         let _held = lock.as_ref().map(|f| f.lock());
         let mut subs = subs_of(&pane);
+        let had = subs.get(id).and_then(|v| v["view"].as_str()).map(String::from);
         note(&mut subs, id, if start { hook["agent_type"].as_str() } else { None }, crate::usage::now());
+        if let Some(entry) = subs.get_mut(id).filter(|e| start && e.get("type").is_some() && e.get("view").is_none()) {
+            if let Some(view) = open_view(&pane, id, &hook) {
+                entry["view"] = json!(view);
+            }
+        }
         // whole, so the tree never reads one half written
         let _ = match subs.is_empty() {
             true => std::fs::remove_file(subs_file(&pane)),
             false => crate::usage::write_atomic(&subs_file(&pane), Value::Object(subs).to_string().as_bytes()),
         };
+        had.filter(|_| !start)
+    };
+    if let Some(view) = closing {
+        let _ = call("pane.close", json!({ "pane_id": view }));
     }
     sync().map_err(|e| e.to_string())
+}
+
+/// The pane of a subagent that a pane's Claude runs, while it has one.
+pub fn view_of(pane: &str, id: &str) -> Option<String> {
+    subs_of(pane).get(id)?["view"].as_str().map(String::from)
+}
+
+/// The tab of a workspace that holds its subagents' panes, as it is named;
+/// it is known by its id, kept in a file, since a plugin may rename it.
+const TAB: &str = "subagents";
+
+fn tab_file(workspace: &str) -> std::path::PathBuf {
+    crate::usage::state_dir().join(format!("subagents-tab-{workspace}"))
+}
+
+/// Whether a tab is a workspace's subagents tab (the dock stays out of it).
+pub fn is_subagents_tab(tab: &str) -> bool {
+    let workspace = tab.split(':').next().unwrap_or_default();
+    std::fs::read_to_string(tab_file(workspace)).is_ok_and(|t| t.trim() == tab)
+}
+
+/// Opens a subagent's live view in its workspace's subagents tab, the tab
+/// made on its first, under its parent and on the parent's Claude account.
+/// The view lists itself as an agent and names itself. Its pane, or None
+/// when Herdr would not open one.
+fn open_view(parent: &str, id: &str, hook: &Value) -> Option<String> {
+    let ws = call("pane.get", json!({ "pane_id": parent })).ok()?["pane"]["workspace_id"].as_str()?.to_string();
+    // Claude keeps a subagent's log and summary beside its session's transcript
+    let dir = std::path::Path::new(hook["transcript_path"].as_str()?).with_extension("").join("subagents");
+    let env = json!({
+        "PACER_SUBAGENT_LOG": dir.join(format!("agent-{id}.jsonl")),
+        "PACER_SUBAGENT_META": dir.join(format!("agent-{id}.meta.json")),
+        "PACER_SUBAGENT_PARENT": parent,
+    });
+    let kept = std::fs::read_to_string(tab_file(&ws)).unwrap_or_default();
+    let tab = Some(kept.trim()).filter(|t| !t.is_empty() && call("tab.get", json!({ "tab_id": t })).is_ok());
+    let open = json!({ "plugin_id": "herdr-pacer", "entrypoint": "subagent", "focus": false, "env": env });
+    let opened = match tab {
+        Some(tab) => {
+            let panes = call("pane.list", json!({ "workspace_id": ws })).ok()?;
+            let beside = panes["panes"].as_array()?.iter().find(|p| p["tab_id"] == tab)?["pane_id"].clone();
+            let at = json!({ "placement": "split", "target_pane_id": beside, "direction": "down" });
+            call("plugin.pane.open", merge(open, at)).ok()?
+        }
+        None => {
+            let opened = call("plugin.pane.open", merge(open, json!({ "placement": "tab", "workspace_id": ws }))).ok()?;
+            let tab = opened["plugin_pane"]["pane"]["tab_id"].as_str().unwrap_or_default();
+            let _ = call("tab.rename", json!({ "tab_id": tab, "label": TAB }));
+            let _ = std::fs::write(tab_file(&ws), tab);
+            let _ = crate::dock::keep_out(tab);
+            opened
+        }
+    };
+    let view = opened["plugin_pane"]["pane"]["pane_id"].as_str()?.to_string();
+    let _ = herdr::report_tokens(&view, json!({ "pacer_parent": parent }), None);
+    crate::context::share_account(parent, &view);
+    Some(view)
+}
+
+fn merge(mut a: Value, b: Value) -> Value {
+    if let (Some(a), Value::Object(b)) = (a.as_object_mut(), b) {
+        a.extend(b);
+    }
+    a
 }
 
 /// A closed pane's list goes with it; a minute's grace, for a pane Herdr has
@@ -383,7 +422,7 @@ mod tests {
 
     fn node(pane: &str, label: &str, parent: Option<&str>) -> Node {
         let (repo, repo_key, account) = (Some("gh-dash".into()), Some("/gh-dash/.git".into()), Some("claude".into()));
-        Node { pane: pane.into(), label: label.into(), parent: parent.map(String::from), repo, repo_key, account, subs: vec![] }
+        Node { pane: pane.into(), label: label.into(), parent: parent.map(String::from), repo, repo_key, account }
     }
 
     fn in_repo(mut n: Node, repo: &str) -> Node {
@@ -454,20 +493,6 @@ mod tests {
                 "○ other · herdr-pacer ᶜˡᵃᵘᵈᵉ",
             ]
         );
-    }
-
-    #[test]
-    fn subagents_branch_off_under_their_agent_before_its_children() {
-        let mut nodes = [node("p1", "orch", None), node("p2", "ui", Some("p1")), node("p3", "lone", None)];
-        nodes[1].subs = vec!["Explore".into(), "goldfish-reviewer".into()];
-        nodes[2].subs = vec!["a".into(), "b".into(), "c".into(), "d".into()];
-        let places = layout(&nodes);
-        let maps = draw(&nodes, &places);
-        let subs = |i: usize| SUBS.iter().filter_map(|t| maps[i][*t].as_str().map(String::from)).collect::<Vec<_>>();
-        assert_eq!(subs(1), ["⠀   ├ ⁺ Explore", "⠀   └ ⁺ goldfish-reviewer"], "under ui's circle");
-        assert_eq!(places[1].rail, "    │", "its line runs down to them");
-        assert_eq!(subs(2), ["├ ⁺ a", "├ ⁺ b", "└ ⁺ 2 more"], "past three, a count");
-        assert!(subs(0).is_empty() && places[0].rail == "│");
     }
 
     #[test]

@@ -159,8 +159,6 @@ pub fn rows_toml(s: &Settings, glue: bool, palette: &crate::theme::Palette) -> S
         (false, false) => rows.extend(METRICS.iter().zip(&groups).map(|(m, g)| format!("[\"$pacer_lines_{}\", {}", m.1, &g[1..]))),
         (false, true) => rows.extend(groups),
     }
-    // the Claude subagents running inside an agent, under its usage
-    rows.extend(crate::tree::SUBS.map(|t| format!("[\"${t}\"]")));
     format!("[ui.sidebar.agents]\nrows = [\n{}\n]\n", rows.iter().map(|r| format!("  {r},")).collect::<Vec<_>>().join("\n"))
 }
 
@@ -199,6 +197,11 @@ fn account_file(pane: &str) -> PathBuf {
 
 fn pane_account(pane: &str) -> String {
     std::fs::read_to_string(account_file(pane)).unwrap_or_default()
+}
+
+/// A subagent's view runs on its parent's Claude account.
+pub fn share_account(parent: &str, view: &str) {
+    set_pane_account(view, &pane_account(parent));
 }
 
 fn set_pane_account(pane: &str, account: &str) {
@@ -724,7 +727,7 @@ mod tests {
             assert_eq!(text.contains("glue"), glue, "stock Herdr rejects the whole file over glue");
             let doc: toml_edit::DocumentMut = text.parse().expect("valid TOML");
             let rows = doc["ui"]["sidebar"]["agents"]["rows"].as_array().unwrap();
-            assert_eq!(rows.len(), if one_line { 5 } else { 7 });
+            assert_eq!(rows.len(), if one_line { 2 } else { 4 });
             assert!(rows.iter().all(|r| r.as_array().unwrap().len() <= 16));
         }
     }

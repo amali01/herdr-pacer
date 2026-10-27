@@ -183,6 +183,13 @@ fn size(tab: &str) -> Result<()> {
     Ok(())
 }
 
+/// Takes out a dock that a tab's first event put in before the tab was known
+/// as a subagents tab; after the dock hooks, which wait their turn.
+pub fn keep_out(tab: &str) -> Result<()> {
+    let _lock = lock(true);
+    close_docks(tab, None)
+}
+
 /// Resizes every dock to the windows now shown, after a settings change.
 pub fn resize_all() -> Result<()> {
     let _lock = lock(true);
@@ -195,6 +202,9 @@ pub fn resize_all() -> Result<()> {
 /// Adds a dock when the tab has none along its bottom. One already there is
 /// left alone, so a size dragged by hand stays and nothing redraws.
 fn ensure(tab: &str) -> Result<()> {
+    if crate::tree::is_subagents_tab(tab) || call("tab.get", json!({ "tab_id": tab })).is_ok_and(|t| t["tab"]["label"] == "subagents") {
+        return Ok(()); // a stack of subagents' views, no work to pace there
+    }
     let Ok(layout) = tree(tab) else {
         return Ok(()); // gone already, e.g. a bounce tab
     };

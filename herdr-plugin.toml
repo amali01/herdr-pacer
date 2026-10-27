@@ -124,6 +124,14 @@ title = "usage"
 placement = "split"
 command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" dock"]
 
+# Opened by the subagent hook: a Claude subagent's live view, in its
+# workspace's "subagents" tab, listed as an agent under its parent.
+[[panes]]
+id = "subagent"
+title = "subagent"
+placement = "split"
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" subview"]
+
 # Opened by the dock's ⚙: what the dock and the sidebar bars show.
 [[panes]]
 id = "settings"

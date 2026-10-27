@@ -168,10 +168,14 @@ high.
 
 Claude Code's own subagents run inside its process, so Herdr never lists
 them. `claude-hook install` (which `setup` runs) also adds Claude's
-SubagentStart and SubagentStop hooks, async, beside any of yours; each
-running subagent then gets a line under its agent, `└ ⁺ Explore`, up to
-three and then a count. One whose stop never comes drops off after six
-hours. `claude-hook remove` takes the hooks out again.
+SubagentStart and SubagentStop hooks, async, beside any of yours. Each
+subagent then gets a pane of its own in its workspace's `subagents` tab: a
+live view of its task, its tool calls and what it says. That pane is listed
+as an agent under the one that started it, named after its task, with its
+own circle and context bar on its parent's account, and a click takes you
+to it. It is a view: you watch the subagent there, and message it from its
+parent's session. The pane closes the moment the subagent stops, and the
+tab with its last one. `claude-hook remove` takes the hooks out again.
 
 An agent nobody started is a row of its own, as is a
 worker whose parent has closed. The tree sort stays out of the way when
@@ -352,6 +356,7 @@ anyone can list. The OpenCode database is opened read-only.
 | `src/tabbar.rs` | The tab bar segments (`herdr-pacer tabbar <agent>`) |
 | `src/tree.rs` | The agent tree: each agent's tree line and the Agents sort (`herdr-pacer tree sync` / `view`) |
 | `src/theme.rs` | The colors of Herdr's built-in themes the sidebar text takes |
+| `src/subview.rs` | A Claude subagent's live view (`herdr-pacer subview`) |
 | `src/setup.rs` | One-command setup |
 | `src/upgrade.rs` | `update` (installs only a newer version) and the once-per-version migration |
 | `claude-statusline.sh` | A shim for statusLines wrapped by the shell-script versions |
