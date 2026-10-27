@@ -416,7 +416,7 @@ fn save_settings(path: &std::path::Path, read: &str, body: &str) -> Result<Optio
     use std::io::Write;
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     let fail = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
-    let real = resolve(path);
+    let real = resolve(path).ok_or_else(|| fail(&"a chain of links too long, or a loop; nothing written"))?;
     // our own writers take turns; the check is made again just before the swap
     let lock = std::fs::File::create(usage::state_dir().join("claude-settings.lock")).map_err(|e| fail(&e))?;
     lock.lock().map_err(|e| fail(&e))?;
@@ -429,9 +429,12 @@ fn save_settings(path: &std::path::Path, read: &str, body: &str) -> Result<Optio
     // made with the file's own mode, so a private file is never readable on the way
     let mode = std::fs::metadata(&real).map_or(0o600, |m| m.permissions().mode() & 0o7777);
     let name = real.file_name().map_or_else(Default::default, |n| n.to_string_lossy().into_owned());
-    let tmp = real.with_file_name(format!(".{name}.herdr-pacer-{}.tmp", std::process::id()));
+    // unique to this write: a crashed run's leftover is never ours to take or remove
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let tmp = real.with_file_name(format!(".{name}.herdr-pacer-{}-{nanos}.tmp", std::process::id()));
+    let made = std::fs::OpenOptions::new().write(true).create_new(true).mode(mode).open(&tmp).map_err(|e| fail(&e))?;
     let swap = || -> std::io::Result<()> {
-        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(mode).open(&tmp)?;
+        let mut file = made;
         file.write_all(body.as_bytes())?;
         file.sync_all()?;
         std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode))?;
@@ -445,16 +448,17 @@ fn save_settings(path: &std::path::Path, read: &str, body: &str) -> Result<Optio
 }
 
 /// The file a path names, through its links, even one whose file is not
-/// there yet: written through, a link stays a link.
-fn resolve(path: &std::path::Path) -> PathBuf {
+/// there yet: written through, a link stays a link. None for a loop or a
+/// chain past 40 links (the kernel's own limit), never the link itself.
+fn resolve(path: &std::path::Path) -> Option<PathBuf> {
     let mut at = path.to_path_buf();
-    for _ in 0..16 {
+    for _ in 0..40 {
         match std::fs::read_link(&at) {
             Ok(to) => at = at.parent().map_or(to.clone(), |dir| dir.join(&to)),
-            Err(_) => break,
+            Err(_) => return Some(at.canonicalize().unwrap_or(at)),
         }
     }
-    at.canonicalize().unwrap_or(at)
+    None
 }
 
 pub fn backup(path: &std::path::Path) -> Option<PathBuf> {
@@ -760,6 +764,11 @@ mod tests {
         assert!(std::fs::symlink_metadata(&dangling).unwrap().file_type().is_symlink());
         assert_eq!(std::fs::read_to_string(dir.join("a/next.json")).unwrap(), "{}\n");
         assert!(std::fs::read_dir(dir.join("a")).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().ends_with(".tmp")), "no temporary file left");
+        // a loop of links is refused, and left as it is
+        std::os::unix::fs::symlink(dir.join("b/loop2"), dir.join("b/loop1")).unwrap();
+        std::os::unix::fs::symlink(dir.join("b/loop1"), dir.join("b/loop2")).unwrap();
+        assert!(save_settings(&dir.join("b/loop1"), "{}", "{}").is_err());
+        assert!(std::fs::symlink_metadata(dir.join("b/loop1")).unwrap().file_type().is_symlink());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

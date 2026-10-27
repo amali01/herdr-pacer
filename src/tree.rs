@@ -524,7 +524,9 @@ fn mode_text((priority, hidden): (bool, bool)) -> String {
 /// the user picked the attention queue (`agent_panel_sort = "priority"`);
 /// either way leaves Claude's subagents out while they are hidden.
 pub fn view() -> herdr::Result<()> {
-    // the mode set is the mode kept, read once
+    // one at a time, and the mode set is the mode kept, read once
+    let lock = std::fs::File::create(crate::usage::state_dir().join("view.lock")).ok();
+    let _held = lock.as_ref().map(|f| f.lock());
     let mode = view_mode();
     let set = view_set(mode);
     if set.is_ok() {
