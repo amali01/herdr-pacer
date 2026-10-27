@@ -79,6 +79,9 @@ pub fn migrate(force: bool) {
     if setup::configured() {
         let _ = setup::apply_config();
         context::report_all(); // the bars' tokens are shaped for glue or not
+        // the rows may lead with the tree now; draw it rather than wait for an event
+        let _ = crate::tree::view();
+        let _ = crate::tree::sync();
     }
     let _ = dock::restart();
     let _ = fs::write(stamp(), now);

@@ -236,6 +236,8 @@ pub fn run() -> Result<(), String> {
     match herdr::call("server.reload_config", json!({})) {
         Ok(_) => {
             println!("    reloaded");
+            let _ = crate::tree::view();
+            let _ = crate::tree::sync();
             match dock::restart() {
                 Ok(true) => println!("    usage docked in this tab; other tabs dock as you visit them"),
                 Ok(false) => println!("    the dock is hidden; ctrl+b u brings it back"),

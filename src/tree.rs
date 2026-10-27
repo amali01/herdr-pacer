@@ -182,11 +182,14 @@ pub fn sync() -> herdr::Result<()> {
     let text = |a: &Value, k: &str| a[k].as_str().filter(|s| !s.is_empty()).map(String::from);
     let agents = list("agent.list", "agents")?;
     // a workspace in a git repo names it, worktrees the main one; others go by their label
-    let repos: HashMap<String, (String, Option<String>)> = list("workspace.list", "workspaces")?
+    let repos: HashMap<String, (String, String)> = list("workspace.list", "workspaces")?
         .iter()
         .filter_map(|w| {
             let tree = &w["worktree"];
-            Some((text(w, "workspace_id")?, (text(tree, "repo_name").or_else(|| text(w, "label"))?, text(tree, "repo_key"))))
+            let id = text(w, "workspace_id")?;
+            // outside git, each workspace is a repo of its own, whatever its label
+            let key = text(tree, "repo_key").unwrap_or_else(|| format!("workspace:{id}"));
+            Some((id, (text(tree, "repo_name").or_else(|| text(w, "label"))?, key)))
         })
         .collect();
     let nodes: Vec<Node> = agents
@@ -199,14 +202,16 @@ pub fn sync() -> herdr::Result<()> {
                 parent: text(&a["tokens"], "pacer_parent"),
                 status: text(a, "agent_status").unwrap_or_default(),
                 repo,
-                repo_key: repo_key.flatten(),
+                repo_key,
                 account: text(a, "display_agent").or_else(|| text(a, "agent")),
             }
         })
         .collect();
     let mut places = layout(&nodes);
     if priority() {
-        // Herdr orders by attention, not by the tree: no branches to mislead
+        // Herdr orders by attention, not by the tree: no branches to mislead,
+        // and no tree sort left over from before the setting changed
+        let _ = view();
         places.iter_mut().for_each(|p| *p = Place { key: std::mem::take(&mut p.key), ..Place::default() });
     }
     let mut failed = None;
@@ -228,11 +233,11 @@ fn priority() -> bool {
     ui("agent_panel_sort").is_some_and(|s| s.as_str() == Some("priority"))
 }
 
-/// Sorts the Agents view by the tree. Left alone when the user picked the
-/// attention-queue order (`agent_panel_sort = "priority"`).
+/// Sorts the Agents view by the tree, or hands it back to Herdr when the
+/// user picked the attention-queue order (`agent_panel_sort = "priority"`).
 pub fn view() -> herdr::Result<()> {
     if priority() {
-        return Ok(());
+        return call("agent.view.clear", json!({ "source": "plugin:herdr-pacer" })).map(drop);
     }
     let sort = [json!({ "field": { "token": "pacer_tree_key" }, "order": "asc" })]
         .into_iter()
