@@ -31,8 +31,10 @@ fn env_u64(name: &str, default: u64) -> u64 {
 
 /// The tokens of metric `m` (an index into METRICS) at `pct`, or the ones
 /// that clear it (`None`). Without `glue` (stock Herdr) the rail rides in the
-/// used token, in its color, since a separate one would sit behind " · ".
-fn tokens(m: usize, pct: Option<u32>, s: &Settings, glue: bool) -> Map<String, Value> {
+/// used token, in its color, since a separate one would sit behind " · ";
+/// so, with a row per metric, do the agent tree's lines (`tree`), and the
+/// bar shrinks so the row fits `width`.
+fn tokens(m: usize, pct: Option<u32>, s: &Settings, glue: bool, tree: &str, width: usize) -> Map<String, Value> {
     let prefix = METRICS[m].1;
     let shown = s.metrics.iter().filter(|&&on| on).count();
     let rows_cells = env_u64("HERDR_PACER_CTX_CELLS", 10) as usize;
@@ -45,15 +47,23 @@ fn tokens(m: usize, pct: Option<u32>, s: &Settings, glue: bool) -> Map<String, V
         _ => 0,
     };
     let lead = if glue && s.one_line && s.metrics[..m].contains(&true) { "⠀" } else { "" };
-    let text = |p: u32, used: &str| {
+    let head = |p: u32| {
         let label = if shown > 1 { METRICS[m].2 } else { "" };
         let pct = if s.one_line { format!("{p}%") } else { format!("{p:>3}%") };
-        let head = match (label, s.one_line) {
+        match (label, s.one_line) {
             ("", _) => pct,
             (l, true) => format!("{l} {pct}"),
             (l, false) => format!("{l:<3} {pct}"),
-        };
-        if cells == 0 { format!("{lead}{head}") } else { format!("{lead}{head} {used}") }
+        }
+    };
+    let in_tree = !glue && !s.one_line;
+    let cells = match pct {
+        Some(p) if in_tree => cells.min(width.saturating_sub(tree.chars().count() + head(p).chars().count() + 1)),
+        _ => cells,
+    };
+    let text = |p: u32, used: &str| {
+        let row = if cells == 0 { format!("{lead}{}", head(p)) } else { format!("{lead}{} {used}", head(p)) };
+        if in_tree { crate::tree::lead(format!("{tree}{row}")) } else { row }
     };
     let mut map = Map::new();
     let bar = pct
@@ -178,7 +188,16 @@ pub fn report(pane: &str, pct: Option<u32>, ttl_ms: u64) -> herdr::Result<()> {
     remember(pane, pct);
     let s = settings::load();
     let pct = pct.filter(|_| s.metrics[0]);
-    herdr::report_tokens(pane, Value::Object(tokens(0, pct, &s, herdr::glue())), pct.map(|_| ttl_ms))
+    let glue = herdr::glue();
+    let tree = if glue { String::new() } else { tree_rail(pane).unwrap_or_default() };
+    herdr::report_tokens(pane, Value::Object(tokens(0, pct, &s, glue, &tree, crate::tree::width())), pct.map(|_| ttl_ms))
+}
+
+/// The agent tree's lines a pane's usage rows lead with (tree.rs reports
+/// them, braille blanks for spaces); None when Herdr would not say.
+fn tree_rail(pane: &str) -> Option<String> {
+    let v = call("pane.get", json!({ "pane_id": pane })).ok()?;
+    Some(v["pane"]["tokens"]["pacer_rail"].as_str().unwrap_or_default().replace('⠀', " "))
 }
 
 fn provider(agent: &str) -> Option<&'static str> {
@@ -203,16 +222,14 @@ pub fn report_usage(pane: &str, agent: &str, account: &str, s: &Settings, rows: 
     let (mut map, glue) = (Map::new(), herdr::glue());
     let five = found.as_ref().and_then(|a| a.five.as_ref()).map(|w| w.pct).filter(|_| s.metrics[1]);
     let week = found.as_ref().and_then(|a| a.week.as_ref()).map(|w| w.pct).filter(|_| s.metrics[2]);
+    let tree = if glue { None } else { tree_rail(pane) };
     for (m, pct) in [(1, five), (2, week)] {
-        map.extend(tokens(m, pct, s, glue));
+        map.extend(tokens(m, pct, s, glue, tree.as_deref().unwrap_or_default(), crate::tree::width()));
     }
-    if s.one_line && !glue {
-        // reported after the context bar, whose number it reads back
-        // a pane Herdr would not show keeps its line rather than lose its rails
-        if let Ok(v) = call("pane.get", json!({ "pane_id": pane })) {
-            let rail = v["pane"]["tokens"]["pacer_rail"].as_str().unwrap_or_default().replace('⠀', " ");
-            map.extend(line_tokens(&rail, [recalled(pane).filter(|_| s.metrics[0]), five, week]));
-        }
+    // reported after the context bar, whose number it reads back; a pane
+    // Herdr would not show keeps its line rather than lose its rails
+    if let Some(tree) = tree.filter(|_| s.one_line) {
+        map.extend(line_tokens(&tree, [recalled(pane).filter(|_| s.metrics[0]), five, week]));
     }
     let mut params = json!({ "tokens": map });
     match account_label(agent, account, found.as_ref()) {
@@ -250,12 +267,11 @@ pub fn report_all() {
     }
 }
 
-/// Redraws one agent's usage line on new tree rails: only the stock one-line
-/// layout leads with them.
+/// Redraws one agent's usage rows on new tree rails: stock Herdr's lead
+/// with them.
 pub fn redraw(pane: &str, agent: &str) {
-    let s = settings::load();
-    if s.one_line && !herdr::glue() {
-        draw(pane, agent, &s, &usage::load());
+    if !herdr::glue() {
+        draw(pane, agent, &settings::load(), &usage::load());
     }
 }
 
@@ -263,7 +279,10 @@ fn draw(pane: &str, agent: &str, s: &Settings, rows: &[usage::Row]) {
     // the account file belongs to the pane's last Claude session, not to a codex after it
     let account = if agent == "claude" { pane_account(pane) } else { String::new() };
     let pct = recalled(pane);
-    let _ = herdr::report_tokens(pane, Value::Object(tokens(0, pct.filter(|_| s.metrics[0]), s, herdr::glue())), Some(21_600_000));
+    let glue = herdr::glue();
+    let tree = if glue { String::new() } else { tree_rail(pane).unwrap_or_default() };
+    let ctx = tokens(0, pct.filter(|_| s.metrics[0]), s, glue, &tree, crate::tree::width());
+    let _ = herdr::report_tokens(pane, Value::Object(ctx), Some(21_600_000));
     let _ = report_usage(pane, agent, &account, s, rows);
 }
 
@@ -569,25 +588,29 @@ mod tests {
     #[test]
     fn one_bucket_reported_the_rest_cleared() {
         let s = Settings::default();
-        let t = tokens(0, Some(72), &s, true);
+        let t = tokens(0, Some(72), &s, true, "", 22);
         assert_eq!(t["pacer_ctx_hot"], " 72% ⣤⣤⣤⣤⣤⣤⣤");
         assert_eq!(t["pacer_ctx"], "⣀⣀⣀");
         assert!(t["pacer_ctx_ok"].is_null() && t["pacer_ctx_crit"].is_null());
-        assert!(tokens(0, None, &s, true).values().all(Value::is_null));
+        assert!(tokens(0, None, &s, true, "", 22).values().all(Value::is_null));
         let rows = Settings { metrics: [true; 3], sidebar_size: 3, ..s.clone() };
-        assert_eq!(tokens(1, Some(100), &rows, true)["pacer_5h_crit"], "5h  100% ⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶");
-        assert!(tokens(1, Some(100), &rows, true)["pacer_5h"].is_null(), "no rail left at 100%");
+        assert_eq!(tokens(1, Some(100), &rows, true, "", 22)["pacer_5h_crit"], "5h  100% ⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶");
+        assert!(tokens(1, Some(100), &rows, true, "", 22)["pacer_5h"].is_null(), "no rail left at 100%");
         let line = Settings { one_line: true, ..rows.clone() };
-        assert_eq!(tokens(0, Some(58), &line, true)["pacer_ctx_warn"], "ctx 58%");
-        assert_eq!(tokens(2, Some(49), &line, true)["pacer_wk_ok"], "⠀wk 49%", "glued on after 5h");
-        assert!(tokens(2, Some(49), &line, true)["pacer_wk"].is_null(), "numbers only for three");
+        assert_eq!(tokens(0, Some(58), &line, true, "", 22)["pacer_ctx_warn"], "ctx 58%");
+        assert_eq!(tokens(2, Some(49), &line, true, "", 22)["pacer_wk_ok"], "⠀wk 49%", "glued on after 5h");
+        assert!(tokens(2, Some(49), &line, true, "", 22)["pacer_wk"].is_null(), "numbers only for three");
         let two = Settings { metrics: [true, false, true], ..line };
-        assert_eq!(tokens(2, Some(50), &two, true)["pacer_wk_warn"], "⠀wk 50% ⣶");
+        assert_eq!(tokens(2, Some(50), &two, true, "", 22)["pacer_wk_warn"], "⠀wk 50% ⣶");
         // stock Herdr: the rail rides in the used token, no blank to glue with
-        let stock = tokens(0, Some(72), &s, false);
-        assert_eq!(stock["pacer_ctx_hot"], " 72% ⣤⣤⣤⣤⣤⣤⣤⣀⣀⣀");
+        // stock Herdr, a row per metric: the tree's lines lead, the bar shrinks to fit
+        let deep = tokens(0, Some(36), &s, false, "│   │ ", 14);
+        assert_eq!(deep["pacer_ctx_ok"], "│   │  36% ⣤⣀⣀", "6 of rails, 4 of number, a space: 3 cells left");
+        assert_eq!(tokens(0, Some(5), &s, false, "", 22)["pacer_ctx_ok"], "⠀ 5% ⡄⣀⣀⣀⣀⣀⣀⣀⣀⣀", "a root's keeps its column");
+        let stock = tokens(0, Some(72), &s, false, "", 22);
+        assert_eq!(stock["pacer_ctx_hot"], "⠀72% ⣤⣤⣤⣤⣤⣤⣤⣀⣀⣀");
         assert!(stock["pacer_ctx"].is_null());
-        assert_eq!(tokens(2, Some(50), &two, false)["pacer_wk_warn"], "wk 50% ⣶⣀");
+        assert_eq!(tokens(2, Some(50), &two, false, "", 22)["pacer_wk_warn"], "wk 50% ⣶⣀");
     }
 
     #[test]

@@ -166,6 +166,11 @@ fn tokens(p: &Place, n: &Node, name: &str, repo: Option<&str>) -> Map<String, Va
     map
 }
 
+/// The cells a sidebar row has past Herdr's margins and border.
+pub fn width() -> usize {
+    (ui("sidebar_width").and_then(|w| w.as_integer()).unwrap_or(26) as usize).saturating_sub(4)
+}
+
 /// A `[ui]` setting from config.toml.
 fn ui(key: &str) -> Option<toml_edit::Item> {
     let config = std::fs::read_to_string(crate::setup::config_path()).ok()?;
