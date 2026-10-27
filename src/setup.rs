@@ -262,6 +262,7 @@ mod tests {
 
     #[test]
     fn migrates_an_old_config_and_stays_put() {
+        let _turn = crate::SETTINGS_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let old = r#"# mine
 [ui]
 sidebar_width = 34

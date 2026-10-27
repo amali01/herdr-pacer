@@ -191,6 +191,7 @@ mod tests {
 
     #[test]
     fn round_trips_and_fills_gaps() {
+        let _turn = crate::SETTINGS_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("herdr-pacer-settings-{}", std::process::id()));
         std::env::set_var("HERDR_PLUGIN_CONFIG_DIR", &dir);
         let _ = fs::remove_dir_all(&dir);
@@ -222,5 +223,6 @@ mod tests {
         fs::write(path(), r#"{"order": ["claude", "nope", "claude"]}"#).unwrap();
         assert_eq!(load().order, [1, 0, 2], "unknown and repeated keys dropped, the rest follow");
         let _ = fs::remove_dir_all(&dir);
+        std::env::remove_var("HERDR_PLUGIN_CONFIG_DIR");
     }
 }

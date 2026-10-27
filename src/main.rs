@@ -15,6 +15,10 @@ mod tui;
 mod upgrade;
 mod usage;
 
+/// Tests that point the settings somewhere else, or read them, take turns.
+#[cfg(test)]
+static SETTINGS_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 const USAGE: &str = "usage: herdr-pacer <command>
 
   dock                      the usage strip docked along the bottom of a tab
