@@ -33,8 +33,10 @@ fn env_u64(name: &str, default: u64) -> u64 {
 /// that clear it (`None`). Without `glue` (stock Herdr) the rail rides in the
 /// used token, in its color, since a separate one would sit behind " · ".
 /// There, with a row per metric, the agent tree's lines lead the row and
-/// take `taken` of its `width` cells; a bar that would not fit is left out.
-fn tokens(m: usize, pct: Option<u32>, s: &Settings, glue: bool, taken: usize, width: usize) -> Map<String, Value> {
+/// fill some of its `width` cells; a bar that would not fit is left out. The
+/// lines are the row's own token, set only beside a number, so a row with
+/// none still hides.
+fn tokens(m: usize, pct: Option<u32>, s: &Settings, glue: bool, lines: &str, width: usize) -> Map<String, Value> {
     let prefix = METRICS[m].1;
     let shown = s.metrics.iter().filter(|&&on| on).count();
     let rows_cells = env_u64("HERDR_PACER_CTX_CELLS", 10) as usize;
@@ -57,13 +59,21 @@ fn tokens(m: usize, pct: Option<u32>, s: &Settings, glue: bool, taken: usize, wi
         }
     };
     let in_tree = !glue && !s.one_line;
+    // lines with no line in them are only an indent: it rides in the value, no
+    // dot left floating after nothing
+    let (indent, lines) = match lines.contains('│') {
+        true => (String::new(), lines),
+        false => (lines.replace('⠀', " "), ""),
+    };
     let cells = match pct {
-        Some(p) if in_tree && taken + head(p).chars().count() + 1 + cells > width => 0,
+        // the lines, Herdr's " · " after them, the number, a space, the bar
+        Some(p) if in_tree && !lines.is_empty() && lines.chars().count() + 3 + head(p).chars().count() + 1 + cells > width => 0,
+        Some(p) if in_tree && indent.chars().count() + head(p).chars().count() + 1 + cells > width => 0,
         _ => cells,
     };
     let text = |p: u32, used: &str| {
         let row = if cells == 0 { format!("{lead}{}", head(p)) } else { format!("{lead}{} {used}", head(p)) };
-        if in_tree { crate::tree::lead(row) } else { row }
+        if in_tree { crate::tree::lead(format!("{indent}{row}")) } else { row }
     };
     let mut map = Map::new();
     let bar = pct
@@ -79,6 +89,8 @@ fn tokens(m: usize, pct: Option<u32>, s: &Settings, glue: bool, taken: usize, wi
     }
     let rail = bar.map(|(_, rail)| rail).filter(|r| !r.is_empty());
     map.insert(format!("pacer_{prefix}"), rail.map_or(Value::Null, Value::from));
+    let lines = (in_tree && pct.is_some() && !lines.is_empty()).then(|| lines.to_string());
+    map.insert(format!("pacer_lines_{prefix}"), lines.map_or(Value::Null, Value::from));
     map
 }
 
@@ -111,11 +123,19 @@ fn group(prefix: &str, glued: bool, glue: bool) -> String {
 /// layout: one token, which has one color, so the line takes its fullest
 /// window's, none while all are fine. Labels in superscript, so it fits
 /// after the tree's lines.
-fn line_tokens(pcts: [Option<u32>; 3]) -> Map<String, Value> {
+fn line_tokens(lines: &str, pcts: [Option<u32>; 3]) -> Map<String, Value> {
     let parts: Vec<String> = METRICS.iter().zip(pcts).filter_map(|(m, p)| Some(format!("{}{}", crate::tree::tiny(m.2), p?))).collect();
     let worst = pcts.iter().flatten().max().map(|&p| usage::bucket(p)).filter(|_| !parts.is_empty());
-    let text = parts.join(" ");
-    BUCKETS.iter().map(|(b, _)| (format!("pacer_use_{b}"), if worst == Some(*b) { json!(text) } else { Value::Null })).collect()
+    // as on the bar rows: lines with no line in them are only an indent
+    let (text, lines) = match lines.contains('│') {
+        true => (parts.join(" "), lines),
+        false => (crate::tree::lead(format!("{}{}", lines.replace('⠀', " "), parts.join(" "))), ""),
+    };
+    let mut map: Map<String, Value> =
+        BUCKETS.iter().map(|(b, _)| (format!("pacer_use_{b}"), if worst == Some(*b) { json!(text) } else { Value::Null })).collect();
+    let lines = (worst.is_some() && !lines.is_empty()).then(|| lines.to_string());
+    map.insert("pacer_lines_use".into(), lines.map_or(Value::Null, Value::from));
+    map
 }
 
 /// `[ui.sidebar.agents] rows` for the chosen layout. Rows of metrics that are
@@ -131,12 +151,12 @@ pub fn rows_toml(s: &Settings, glue: bool, palette: &crate::theme::Palette) -> S
     let groups: Vec<String> = METRICS.iter().enumerate().map(|(i, m)| group(m.1, s.one_line && i > 0, glue)).collect();
     match (s.one_line, glue) {
         (true, false) => rows.push(format!(
-            "[\"$pacer_lines\", \"$pacer_use_ok\", {}]",
+            "[\"$pacer_lines_use\", \"$pacer_use_ok\", {}]",
             [("warn", &palette.peach), ("hot", &palette.yellow), ("crit", &palette.red)].map(|(b, c)| format!("{{ token = \"$pacer_use_{b}\"{} }}", fg(c))).join(", ")
         )),
         (true, true) => rows.push(format!("[{}]", groups.iter().map(|g| &g[1..g.len() - 1]).collect::<Vec<_>>().join(", "))),
         // stock Herdr: each row leads with the tree's lines, in their own gray token
-        (false, false) => rows.extend(groups.iter().map(|g| format!("[\"$pacer_lines\", {}", &g[1..]))),
+        (false, false) => rows.extend(METRICS.iter().zip(&groups).map(|(m, g)| format!("[\"$pacer_lines_{}\", {}", m.1, &g[1..]))),
         (false, true) => rows.extend(groups),
     }
     // the Claude subagents running inside an agent, under its usage
@@ -193,15 +213,15 @@ pub fn report(pane: &str, pct: Option<u32>, ttl_ms: u64) -> herdr::Result<()> {
     let s = settings::load();
     let pct = pct.filter(|_| s.metrics[0]);
     let glue = herdr::glue();
-    let taken = if glue || s.one_line { 0 } else { tree_taken(pane) };
-    herdr::report_tokens(pane, Value::Object(tokens(0, pct, &s, glue, taken, crate::tree::width())), pct.map(|_| ttl_ms))
+    let lines = if glue || s.one_line { String::new() } else { tree_lines(pane) };
+    herdr::report_tokens(pane, Value::Object(tokens(0, pct, &s, glue, &lines, crate::tree::width())), pct.map(|_| ttl_ms))
 }
 
-/// The cells the agent tree's lines take at the head of a pane's usage rows
-/// (tree.rs reports them), with the " · " Herdr puts after them.
-fn tree_taken(pane: &str) -> usize {
+/// The agent tree's lines at the head of a pane's usage rows, as tree.rs
+/// reports them; none at a root with nothing under it.
+fn tree_lines(pane: &str) -> String {
     let v = call("pane.get", json!({ "pane_id": pane })).unwrap_or_default();
-    v["pane"]["tokens"]["pacer_lines"].as_str().map_or(0, |l| l.chars().count() + 3)
+    v["pane"]["tokens"]["pacer_lines"].as_str().unwrap_or_default().to_string()
 }
 
 fn provider(agent: &str) -> Option<&'static str> {
@@ -226,13 +246,14 @@ pub fn report_usage(pane: &str, agent: &str, account: &str, s: &Settings, rows: 
     let (mut map, glue) = (Map::new(), herdr::glue());
     let five = found.as_ref().and_then(|a| a.five.as_ref()).map(|w| w.pct).filter(|_| s.metrics[1]);
     let week = found.as_ref().and_then(|a| a.week.as_ref()).map(|w| w.pct).filter(|_| s.metrics[2]);
-    let taken = if glue || s.one_line { 0 } else { tree_taken(pane) };
+    let lines = if glue { String::new() } else { tree_lines(pane) };
+    let row_lines = if s.one_line { "" } else { lines.as_str() };
     for (m, pct) in [(1, five), (2, week)] {
-        map.extend(tokens(m, pct, s, glue, taken, crate::tree::width()));
+        map.extend(tokens(m, pct, s, glue, row_lines, crate::tree::width()));
     }
     if s.one_line && !glue {
         // reported after the context bar, whose number it reads back
-        map.extend(line_tokens([recalled(pane).filter(|_| s.metrics[0]), five, week]));
+        map.extend(line_tokens(&lines, [recalled(pane).filter(|_| s.metrics[0]), five, week]));
     }
     let mut params = json!({ "tokens": map });
     match account_label(agent, account, found.as_ref()) {
@@ -283,8 +304,8 @@ fn draw(pane: &str, agent: &str, s: &Settings, rows: &[usage::Row]) {
     let account = if agent == "claude" { pane_account(pane) } else { String::new() };
     let pct = recalled(pane);
     let glue = herdr::glue();
-    let taken = if glue || s.one_line { 0 } else { tree_taken(pane) };
-    let ctx = tokens(0, pct.filter(|_| s.metrics[0]), s, glue, taken, crate::tree::width());
+    let lines = if glue || s.one_line { String::new() } else { tree_lines(pane) };
+    let ctx = tokens(0, pct.filter(|_| s.metrics[0]), s, glue, &lines, crate::tree::width());
     let _ = herdr::report_tokens(pane, Value::Object(ctx), Some(21_600_000));
     let _ = report_usage(pane, agent, &account, s, rows);
 }
@@ -428,16 +449,22 @@ pub fn claude_hook(action: &str) -> Result<String, String> {
 /// (`Some` command) or taken out, by any build; the user's own stay as they
 /// are. Async, so a subagent never waits on us. Whether anything changed.
 fn put_subagent_hooks(settings: &mut Value, exe: Option<&str>) -> bool {
-    let ours = |h: &Value| h["command"].as_str().is_some_and(|c| c.contains("herdr-pacer") && c.contains(" subagent "));
+    // exactly the command we put in, from any build: '<path>/herdr-pacer' subagent start|stop
+    let ours = |h: &Value| {
+        let c = h["command"].as_str().unwrap_or_default();
+        let exe = c.strip_suffix(" subagent start").or_else(|| c.strip_suffix(" subagent stop"));
+        exe.is_some_and(|e| e.starts_with('\'') && e.ends_with("herdr-pacer'"))
+    };
     let before = settings["hooks"].clone();
     for (event, arg) in [("SubagentStart", "start"), ("SubagentStop", "stop")] {
         let mut groups = settings["hooks"][event].as_array().cloned().unwrap_or_default();
-        for group in &mut groups {
-            if let Some(hooks) = group["hooks"].as_array_mut() {
-                hooks.retain(|h| !ours(h));
-            }
-        }
-        groups.retain(|g| g["hooks"].as_array().is_none_or(|h| !h.is_empty()));
+        // a group goes only when taking ours out empties it
+        groups.retain_mut(|group| {
+            let Some(hooks) = group["hooks"].as_array_mut() else { return true };
+            let had = hooks.len();
+            hooks.retain(|h| !ours(h));
+            !(hooks.is_empty() && had > 0)
+        });
         if let Some(exe) = exe {
             groups.push(json!({ "hooks": [{ "type": "command", "command": format!("{exe} subagent {arg}"), "async": true, "timeout": 10 }] }));
         }
@@ -628,59 +655,66 @@ mod tests {
     #[test]
     fn one_bucket_reported_the_rest_cleared() {
         let s = Settings::default();
-        let t = tokens(0, Some(72), &s, true, 0, 22);
+        let t = tokens(0, Some(72), &s, true, "", 22);
         assert_eq!(t["pacer_ctx_hot"], " 72% ⣤⣤⣤⣤⣤⣤⣤");
         assert_eq!(t["pacer_ctx"], "⣀⣀⣀");
         assert!(t["pacer_ctx_ok"].is_null() && t["pacer_ctx_crit"].is_null());
-        assert!(tokens(0, None, &s, true, 0, 22).values().all(Value::is_null));
+        assert!(tokens(0, None, &s, true, "", 22).values().all(Value::is_null));
         let rows = Settings { metrics: [true; 3], sidebar_size: 3, ..s.clone() };
-        assert_eq!(tokens(1, Some(100), &rows, true, 0, 22)["pacer_5h_crit"], "5h  100% ⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶");
-        assert!(tokens(1, Some(100), &rows, true, 0, 22)["pacer_5h"].is_null(), "no rail left at 100%");
+        assert_eq!(tokens(1, Some(100), &rows, true, "", 22)["pacer_5h_crit"], "5h  100% ⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶");
+        assert!(tokens(1, Some(100), &rows, true, "", 22)["pacer_5h"].is_null(), "no rail left at 100%");
         let line = Settings { one_line: true, ..rows.clone() };
-        assert_eq!(tokens(0, Some(58), &line, true, 0, 22)["pacer_ctx_warn"], "ctx 58%");
-        assert_eq!(tokens(2, Some(49), &line, true, 0, 22)["pacer_wk_ok"], "⠀wk 49%", "glued on after 5h");
-        assert!(tokens(2, Some(49), &line, true, 0, 22)["pacer_wk"].is_null(), "numbers only for three");
+        assert_eq!(tokens(0, Some(58), &line, true, "", 22)["pacer_ctx_warn"], "ctx 58%");
+        assert_eq!(tokens(2, Some(49), &line, true, "", 22)["pacer_wk_ok"], "⠀wk 49%", "glued on after 5h");
+        assert!(tokens(2, Some(49), &line, true, "", 22)["pacer_wk"].is_null(), "numbers only for three");
         let two = Settings { metrics: [true, false, true], ..line };
-        assert_eq!(tokens(2, Some(50), &two, true, 0, 22)["pacer_wk_warn"], "⠀wk 50% ⣶");
+        assert_eq!(tokens(2, Some(50), &two, true, "", 22)["pacer_wk_warn"], "⠀wk 50% ⣶");
         // stock Herdr: the rail rides in the used token, no blank to glue with;
         // with a row per metric, a bar that would not fit after the tree's lines goes
-        assert_eq!(tokens(0, Some(36), &s, false, 8, 22)["pacer_ctx_ok"], "⠀36%", "8 of lines, 4 of number, a space: 9 cells left");
-        assert_eq!(tokens(0, Some(36), &s, false, 7, 22)["pacer_ctx_ok"], "⠀36% ⣤⣤⣤⡄⣀⣀⣀⣀⣀⣀", "10 left: the bar fits");
-        assert_eq!(tokens(0, Some(5), &s, false, 0, 22)["pacer_ctx_ok"], "⠀ 5% ⡄⣀⣀⣀⣀⣀⣀⣀⣀⣀", "a root's keeps its column");
-        let stock = tokens(0, Some(72), &s, false, 0, 22);
+        assert_eq!(tokens(0, Some(36), &s, false, "│⠀⠀⠀│", 22)["pacer_ctx_ok"], "⠀36%", "5 of lines, 3 of dot, 4 of number, a space: 9 cells left");
+        assert_eq!(tokens(0, Some(36), &s, false, "│⠀⠀⠀", 22)["pacer_ctx_ok"], "⠀36% ⣤⣤⣤⡄⣀⣀⣀⣀⣀⣀", "10 left: the bar fits");
+        assert_eq!(tokens(0, Some(5), &s, false, "", 22)["pacer_ctx_ok"], "⠀ 5% ⡄⣀⣀⣀⣀⣀⣀⣀⣀⣀", "a root's keeps its column");
+        assert_eq!(tokens(0, Some(36), &s, false, "│", 22)["pacer_lines_ctx"], "│");
+        assert!(tokens(0, None, &s, false, "│", 22)["pacer_lines_ctx"].is_null(), "no number, no lines: the row still hides");
+        let last = tokens(0, Some(36), &s, false, "⠀⠀⠀⠀", 22);
+        assert_eq!((last["pacer_ctx_ok"].as_str(), last["pacer_lines_ctx"].as_str()), (Some("⠀    36% ⣤⣤⣤⡄⣀⣀⣀⣀⣀⣀"), None), "a blank indent rides in the value");
+        let stock = tokens(0, Some(72), &s, false, "", 22);
         assert_eq!(stock["pacer_ctx_hot"], "⠀72% ⣤⣤⣤⣤⣤⣤⣤⣀⣀⣀");
         assert!(stock["pacer_ctx"].is_null());
-        assert_eq!(tokens(2, Some(50), &two, false, 0, 22)["pacer_wk_warn"], "wk 50% ⣶⣀");
+        assert_eq!(tokens(2, Some(50), &two, false, "", 22)["pacer_wk_warn"], "wk 50% ⣶⣀");
     }
 
     #[test]
     fn subagent_hooks_come_and_go_beside_the_users_own() {
         let mine = json!({ "hooks": [{ "type": "command", "command": "notify-send hi" }] });
-        let mut settings = json!({ "statusLine": {}, "hooks": { "SubagentStop": [mine.clone()] } });
+        let wrapper = json!({ "hooks": [{ "type": "command", "command": "log; herdr-pacer subagent stop" }] });
+        let empty = json!({ "matcher": "x", "hooks": [] });
+        let mut settings = json!({ "statusLine": {}, "hooks": { "SubagentStop": [mine.clone(), wrapper.clone(), empty.clone()] } });
         assert!(put_subagent_hooks(&mut settings, Some("'/x/herdr-pacer'")));
         assert_eq!(settings["hooks"]["SubagentStart"][0]["hooks"][0]["command"], "'/x/herdr-pacer' subagent start");
-        assert_eq!(settings["hooks"]["SubagentStop"].as_array().unwrap().len(), 2);
-        assert_eq!(settings["hooks"]["SubagentStop"][1]["hooks"][0]["async"], true);
+        assert_eq!(settings["hooks"]["SubagentStop"].as_array().unwrap().len(), 4);
+        assert_eq!(settings["hooks"]["SubagentStop"][3]["hooks"][0]["async"], true);
         assert!(!put_subagent_hooks(&mut settings, Some("'/x/herdr-pacer'")), "installed once");
         assert!(put_subagent_hooks(&mut settings, Some("'/y/herdr-pacer'")), "a new build replaces ours");
         assert_eq!(settings["hooks"]["SubagentStart"].as_array().unwrap().len(), 1);
         assert!(put_subagent_hooks(&mut settings, None));
-        assert_eq!(settings["hooks"], json!({ "SubagentStop": [mine] }), "the user's own stay");
+        assert_eq!(settings["hooks"], json!({ "SubagentStop": [mine, wrapper, empty] }), "the user's own stay, even ones naming us");
         let mut bare = json!({});
-        put_subagent_hooks(&mut bare, Some("herdr-pacer"));
+        put_subagent_hooks(&mut bare, Some("'/x/herdr-pacer'"));
         put_subagent_hooks(&mut bare, None);
         assert_eq!(bare, json!({}), "no empty hooks left behind");
     }
 
     #[test]
     fn one_usage_line_takes_its_fullest_windows_color() {
-        let line = line_tokens([Some(17), Some(34), Some(19)]);
+        let line = line_tokens("", [Some(17), Some(34), Some(19)]);
         assert_eq!(line["pacer_use_ok"], "ᶜᵗˣ17 ⁵ʰ34 ʷᵏ19");
         assert!(line["pacer_use_crit"].is_null());
-        let line = line_tokens([Some(21), None, Some(98)]);
+        let line = line_tokens("", [Some(21), None, Some(98)]);
         assert_eq!(line["pacer_use_crit"], "ᶜᵗˣ21 ʷᵏ98", "a window with no number is left out");
         assert!(line["pacer_use_ok"].is_null());
-        assert!(line_tokens([None; 3]).values().all(Value::is_null), "no numbers, no line");
+        assert!(line_tokens("│", [None; 3]).values().all(Value::is_null), "no numbers, no line, no lines");
+        assert_eq!(line_tokens("│", [Some(1), None, None])["pacer_lines_use"], "│");
     }
 
     #[test]

@@ -248,11 +248,19 @@ pub fn sync() -> herdr::Result<()> {
     }
     let mut failed = None;
     for ((want, node), a) in draw(&nodes, &places).into_iter().zip(&nodes).zip(&agents) {
-        let changed: Map<String, Value> = want.into_iter().filter(|(k, v)| &a["tokens"][k] != v).collect();
-        if node.pane.is_empty() || changed.is_empty() {
+        let (subs, changed): (Map<String, Value>, Map<String, Value>) =
+            want.into_iter().filter(|(k, v)| &a["tokens"][k] != v).partition(|(k, _)| SUBS.contains(&k.as_str()));
+        if node.pane.is_empty() || changed.is_empty() && subs.is_empty() {
             continue;
         }
+        // a subagent whose stop never comes leaves the sidebar on its own
+        if !subs.is_empty() {
+            let _ = herdr::report_tokens(&node.pane, Value::Object(subs), Some(SUB_TTL as u64 * 1000));
+        }
         // a pane that closed since the list fails alone; the rest still update
+        if changed.is_empty() {
+            continue;
+        }
         if let Err(e) = herdr::report_tokens(&node.pane, Value::Object(changed.clone()), None) {
             failed = Some(e);
         } else if changed.contains_key("pacer_lines") {
@@ -272,6 +280,8 @@ pub fn sync() -> herdr::Result<()> {
 
 /// How long a subagent whose stop never came stays listed.
 const SUB_TTL: i64 = 6 * 3600;
+/// How long a stop that came before its start is kept, to turn the start away.
+const STOP_TTL: i64 = 600;
 
 fn subs_file(pane: &str) -> std::path::PathBuf {
     crate::usage::state_dir().join(format!("subagents-{pane}.json"))
@@ -290,14 +300,23 @@ fn running(pane: &str) -> Vec<String> {
 }
 
 /// A subagent started (with its type) or stopped, in a pane's list. Claude
-/// also stops agents of its own that never started under a type; those, and
-/// ones past their time, are dropped.
+/// also starts agents of its own with no type; those are not listed. The
+/// hooks are async, so a short one's stop can come first: it is kept a while
+/// and turns the late start away.
 fn note(subs: &mut Map<String, Value>, id: &str, kind: Option<&str>, now: i64) {
-    match kind.filter(|k| !k.is_empty()) {
+    let stopped = subs.get(id).is_some_and(|v| v.get("stopped").is_some());
+    match kind {
+        Some("") => {}
+        Some(_) if stopped => drop(subs.remove(id)),
         Some(kind) => drop(subs.insert(id.into(), json!({ "type": kind, "at": now }))),
-        None => drop(subs.remove(id)),
+        None if subs.remove(id).is_some_and(|v| v.get("type").is_some()) => {}
+        None => drop(subs.insert(id.into(), json!({ "stopped": now }))),
     }
-    subs.retain(|_, v| v["at"].as_i64().is_some_and(|at| at > now - SUB_TTL));
+    subs.retain(|_, v| match (v["at"].as_i64(), v["stopped"].as_i64()) {
+        (Some(at), _) => at > now - SUB_TTL,
+        (_, Some(at)) => at > now - STOP_TTL,
+        _ => false,
+    });
 }
 
 /// `subagent start|stop`, a Claude hook: the payload on stdin.
@@ -311,27 +330,30 @@ pub fn subagent(event: &str) -> Result<(), String> {
     let mut payload = String::new();
     let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut payload);
     let hook: Value = serde_json::from_str(&payload).unwrap_or_default();
-    let Some(id) = hook["agent_id"].as_str() else { return Ok(()) };
+    let Some(id) = hook["agent_id"].as_str().filter(|i| !i.is_empty()) else { return Ok(()) };
     {
         // parallel subagents start together: one read-modify-write at a time
         let lock = std::fs::File::create(crate::usage::state_dir().join("subagents.lock")).ok();
         let _held = lock.as_ref().map(|f| f.lock());
         let mut subs = subs_of(&pane);
         note(&mut subs, id, if start { hook["agent_type"].as_str() } else { None }, crate::usage::now());
+        // whole, so the tree never reads one half written
         let _ = match subs.is_empty() {
             true => std::fs::remove_file(subs_file(&pane)),
-            false => std::fs::write(subs_file(&pane), Value::Object(subs).to_string()),
+            false => crate::usage::write_atomic(&subs_file(&pane), Value::Object(subs).to_string().as_bytes()),
         };
     }
     sync().map_err(|e| e.to_string())
 }
 
-/// A closed pane's list goes with it.
+/// A closed pane's list goes with it; a minute's grace, for a pane Herdr has
+/// not listed as an agent yet when its first subagent starts.
 fn forget_closed(nodes: &[Node]) {
     for file in std::fs::read_dir(crate::usage::state_dir()).into_iter().flatten().flatten() {
         let name = file.file_name().to_string_lossy().into_owned();
         let pane = name.strip_prefix("subagents-").and_then(|n| n.strip_suffix(".json"));
-        if pane.is_some_and(|p| !nodes.iter().any(|n| n.pane == p)) {
+        let settled = file.metadata().and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().is_ok_and(|e| e.as_secs() > 60));
+        if settled && pane.is_some_and(|p| !nodes.iter().any(|n| n.pane == p)) {
             let _ = std::fs::remove_file(file.path());
         }
     }
@@ -450,16 +472,25 @@ mod tests {
 
     #[test]
     fn a_subagent_is_listed_from_its_start_to_its_stop() {
+        let listed = |subs: &Map<String, Value>| subs.iter().filter(|e| e.1.get("type").is_some()).map(|e| e.0.clone()).collect::<Vec<_>>();
         let mut subs = Map::new();
         note(&mut subs, "a1", Some("Explore"), 1000);
         note(&mut subs, "a2", Some("Plan"), 1001);
         note(&mut subs, "x", Some(""), 1002);
-        assert_eq!(subs.len(), 2, "Claude's own untyped agents are not listed");
+        assert_eq!(listed(&subs), ["a1", "a2"], "Claude's own untyped agents are not listed");
         note(&mut subs, "a1", None, 1003);
         note(&mut subs, "never-started", None, 1004);
-        assert_eq!(subs.keys().collect::<Vec<_>>(), ["a2"]);
+        assert_eq!(listed(&subs), ["a2"]);
         note(&mut subs, "a3", Some("Explore"), 1001 + SUB_TTL);
         assert_eq!(subs.keys().collect::<Vec<_>>(), ["a3"], "one whose stop never came goes in time");
+        // async hooks: a short one's stop can come before its start
+        let mut subs = Map::new();
+        note(&mut subs, "quick", None, 2000);
+        note(&mut subs, "quick", Some("Explore"), 2001);
+        assert!(subs.is_empty(), "the late start is turned away");
+        note(&mut subs, "early", None, 2000);
+        note(&mut subs, "later", Some("Plan"), 2000 + STOP_TTL);
+        assert_eq!(subs.keys().collect::<Vec<_>>(), ["later"], "an unmatched stop is not kept for long");
     }
 
     #[test]
