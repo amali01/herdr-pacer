@@ -97,6 +97,17 @@ fn group(prefix: &str, glued: bool, glue: bool) -> String {
     format!("[{}, {{ token = \"$pacer_{prefix}\", fg = \"{RAIL_FG}\"{} }}]", used.join(", "), attr(true))
 }
 
+/// Every metric on one line under an agent, for stock Herdr's one-line layout:
+/// it leads with the agent tree's rails, so they run on unbroken, which takes
+/// one token, and a token has one color: the line takes its fullest window's,
+/// none while all are fine. Labels in superscript, so it fits the sidebar.
+fn line_tokens(rail: &str, pcts: [Option<u32>; 3]) -> Map<String, Value> {
+    let parts: Vec<String> = METRICS.iter().zip(pcts).filter_map(|(m, p)| Some(format!("{}{}", crate::tree::tiny(m.2), p?))).collect();
+    let worst = pcts.iter().flatten().max().map(|&p| usage::bucket(p)).filter(|_| !parts.is_empty());
+    let text = crate::tree::lead(format!("{rail}{}", parts.join(" ")));
+    BUCKETS.iter().map(|(b, _)| (format!("pacer_use_{b}"), if worst == Some(*b) { json!(text) } else { Value::Null })).collect()
+}
+
 /// `[ui.sidebar.agents] rows` for the chosen layout. Rows of metrics that are
 /// switched off stay: Herdr hides a row whose tokens are all unreported.
 pub fn rows_toml(s: &Settings, glue: bool) -> String {
@@ -107,9 +118,13 @@ pub fn rows_toml(s: &Settings, glue: bool) -> String {
     });
     let mut rows = vec![format!("[{}, {{ token = \"$pacer_repo\", dim = true }}]", line.join(", "))];
     let groups: Vec<String> = METRICS.iter().enumerate().map(|(i, m)| group(m.1, s.one_line && i > 0, glue)).collect();
-    match s.one_line {
-        true => rows.push(format!("[{}]", groups.iter().map(|g| &g[1..g.len() - 1]).collect::<Vec<_>>().join(", "))),
-        false => rows.extend(groups),
+    match (s.one_line, glue) {
+        (true, false) => rows.push(format!(
+            "[{}]",
+            BUCKETS.map(|(b, fg)| format!("{{ token = \"$pacer_use_{b}\"{} }}", if b == "ok" { String::new() } else { format!(", fg = \"{fg}\"") })).join(", ")
+        )),
+        (true, true) => rows.push(format!("[{}]", groups.iter().map(|g| &g[1..g.len() - 1]).collect::<Vec<_>>().join(", "))),
+        (false, _) => rows.extend(groups),
     }
     format!("[ui.sidebar.agents]\nrows = [\n{}\n]\n", rows.iter().map(|r| format!("  {r},")).collect::<Vec<_>>().join("\n"))
 }
@@ -185,8 +200,15 @@ fn pane_agent(rows: &[usage::Row], agent: &str, account: &str) -> Option<usage::
 pub fn report_usage(pane: &str, agent: &str, account: &str, s: &Settings, rows: &[usage::Row]) -> herdr::Result<()> {
     let found = pane_agent(rows, agent, account);
     let (mut map, glue) = (Map::new(), herdr::glue());
-    for (m, window) in [(1, found.as_ref().and_then(|a| a.five.as_ref())), (2, found.as_ref().and_then(|a| a.week.as_ref()))] {
-        map.extend(tokens(m, window.map(|w| w.pct).filter(|_| s.metrics[m]), s, glue));
+    let five = found.as_ref().and_then(|a| a.five.as_ref()).map(|w| w.pct).filter(|_| s.metrics[1]);
+    let week = found.as_ref().and_then(|a| a.week.as_ref()).map(|w| w.pct).filter(|_| s.metrics[2]);
+    for (m, pct) in [(1, five), (2, week)] {
+        map.extend(tokens(m, pct, s, glue));
+    }
+    if s.one_line && !glue {
+        // reported after the context bar, whose number it reads back
+        let rail = call("pane.get", json!({ "pane_id": pane })).ok().and_then(|v| v["pane"]["tokens"]["pacer_rail"].as_str().map(|r| r.replace('⠀', " ")));
+        map.extend(line_tokens(&rail.unwrap_or_default(), [recalled(pane).filter(|_| s.metrics[0]), five, week]));
     }
     let mut params = json!({ "tokens": map });
     match account_label(agent, account, found.as_ref()) {
@@ -220,12 +242,21 @@ pub fn report_all() {
     for a in &agents {
         let (Some(pane), Some(agent)) = (a["pane_id"].as_str(), a["agent"].as_str()) else { continue };
         let _ = herdr::report_tokens(pane, Value::Object(legacy()), None);
-        // the account file belongs to the pane's last Claude session, not to a codex after it
-        let account = if agent == "claude" { pane_account(pane) } else { String::new() };
-        let pct = recalled(pane);
-        let _ = herdr::report_tokens(pane, Value::Object(tokens(0, pct.filter(|_| s.metrics[0]), &s, herdr::glue())), Some(21_600_000));
-        let _ = report_usage(pane, agent, &account, &s, &rows);
+        draw(pane, agent, &s, &rows);
     }
+}
+
+/// Redraws one agent's bars from what was last reported.
+pub fn redraw(pane: &str, agent: &str) {
+    draw(pane, agent, &settings::load(), &usage::load());
+}
+
+fn draw(pane: &str, agent: &str, s: &Settings, rows: &[usage::Row]) {
+    // the account file belongs to the pane's last Claude session, not to a codex after it
+    let account = if agent == "claude" { pane_account(pane) } else { String::new() };
+    let pct = recalled(pane);
+    let _ = herdr::report_tokens(pane, Value::Object(tokens(0, pct.filter(|_| s.metrics[0]), s, herdr::glue())), Some(21_600_000));
+    let _ = report_usage(pane, agent, &account, s, rows);
 }
 
 // ── claude: a pass-through statusLine ──
@@ -549,6 +580,17 @@ mod tests {
         assert_eq!(stock["pacer_ctx_hot"], " 72% ⣤⣤⣤⣤⣤⣤⣤⣀⣀⣀");
         assert!(stock["pacer_ctx"].is_null());
         assert_eq!(tokens(2, Some(50), &two, false)["pacer_wk_warn"], "wk 50% ⣶⣀");
+    }
+
+    #[test]
+    fn one_usage_line_carries_the_tree_rails_in_its_fullest_windows_color() {
+        let line = line_tokens("│  ", [Some(17), Some(34), Some(19)]);
+        assert_eq!(line["pacer_use_ok"], "│  ᶜᵗˣ17 ⁵ʰ34 ʷᵏ19");
+        assert!(line["pacer_use_crit"].is_null());
+        let line = line_tokens("   ", [Some(21), None, Some(98)]);
+        assert_eq!(line["pacer_use_crit"], "⠀  ᶜᵗˣ21 ʷᵏ98", "a window with no number is left out; the leading blank survives Herdr's trim");
+        assert!(line["pacer_use_ok"].is_null());
+        assert!(line_tokens("│ ", [None; 3]).values().all(Value::is_null), "no numbers, no line");
     }
 
     #[test]

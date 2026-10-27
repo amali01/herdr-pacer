@@ -289,7 +289,7 @@ command = "lazygit"
         assert!(once.starts_with("# mine"));
         assert!(!once.contains("sidebar_width") && !once.contains("dock-collapse") && !once.contains("ctrl+u"));
         assert!(once.contains(r#"key = ["prefix+u", "prefix+shift+u"]"#) && once.contains(TOGGLE));
-        assert!(once.contains("lazygit") && once.contains("$pacer_ctx_ok"));
+        assert!(once.contains("lazygit") && once.contains("$pacer_tree_idle"), "rows that every layout has");
         let mut again: DocumentMut = once.parse().unwrap();
         let notes = patch(&mut again);
         assert_eq!(again.to_string(), once);

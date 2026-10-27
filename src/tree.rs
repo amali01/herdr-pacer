@@ -50,11 +50,13 @@ struct Node {
 }
 
 /// An agent's place: the parent it is drawn under, what leads its line (the
-/// rails and its branch), and its sort key.
+/// rails and its branch), what leads the usage line below it (`rail`, the
+/// rails running on), and its sort key.
 #[derive(Clone, Debug, Default, PartialEq)]
 struct Place {
     up: Option<usize>,
     head: String,
+    rail: String,
     key: String,
 }
 
@@ -95,14 +97,15 @@ fn layout(nodes: &[Node]) -> Vec<Place> {
             for (k, &c) in kids.iter().enumerate().rev() {
                 stack.push((c, Some(n), cont.clone(), Some(k + 1 == kids.len()), format!("{key}.{c:04}")));
             }
-            out[n] = Place { up, head: format!("{prefix}{branch}"), key };
+            let rail = format!("{cont}{}", if kids.is_empty() { "  " } else { "│ " });
+            out[n] = Place { up, head: format!("{prefix}{branch}"), rail, key };
         }
     }
     out
 }
 
 /// Herdr trims leading spaces from a token, not a braille blank.
-fn lead(line: String) -> String {
+pub fn lead(line: String) -> String {
     match line.strip_prefix(' ') {
         Some(rest) => format!("⠀{rest}"),
         None => line,
@@ -111,7 +114,7 @@ fn lead(line: String) -> String {
 
 /// A terminal has one font size; superscript is the smallest text it draws.
 /// There is no superscript q, so it stays as it is.
-fn tiny(s: &str) -> String {
+pub fn tiny(s: &str) -> String {
     let (from, to) = ("abcdefghijklmnoprstuvwxyz0123456789-", "ᵃᵇᶜᵈᵉᶠᵍʰⁱʲᵏˡᵐⁿᵒᵖʳˢᵗᵘᵛʷˣʸᶻ⁰¹²³⁴⁵⁶⁷⁸⁹⁻");
     s.chars().map(|c| c.to_ascii_lowercase()).map(|c| from.chars().zip(to.chars()).find(|f| f.0 == c).map_or(c, |f| f.1)).collect()
 }
@@ -162,6 +165,8 @@ fn tokens(p: &Place, n: &Node, name: &str, repo: Option<&str>) -> Map<String, Va
     }
     let with: Vec<String> = repo.map(String::from).into_iter().chain(n.account.as_deref().map(tiny)).collect();
     map.insert("pacer_repo".into(), if with.is_empty() { Value::Null } else { with.join(" ").into() });
+    // Herdr trims a token's spaces at both ends; braille blanks it keeps
+    map.insert("pacer_rail".into(), p.rail.replace(' ', "⠀").into());
     map.insert("pacer_tree_key".into(), p.key.clone().into());
     map
 }
@@ -212,7 +217,7 @@ pub fn sync() -> herdr::Result<()> {
         // Herdr orders by attention, not by the tree: no branches to mislead,
         // and no tree sort left over from before the setting changed
         let _ = view();
-        places.iter_mut().for_each(|p| *p = Place { key: std::mem::take(&mut p.key), ..Place::default() });
+        places.iter_mut().for_each(|p| *p = Place { rail: "  ".into(), key: std::mem::take(&mut p.key), ..Place::default() });
     }
     let mut failed = None;
     for ((want, node), a) in draw(&nodes, &places).into_iter().zip(&nodes).zip(&agents) {
@@ -221,8 +226,11 @@ pub fn sync() -> herdr::Result<()> {
             continue;
         }
         // a pane that closed since the list fails alone; the rest still update
-        if let Err(e) = herdr::report_tokens(&node.pane, Value::Object(changed), None) {
+        if let Err(e) = herdr::report_tokens(&node.pane, Value::Object(changed.clone()), None) {
             failed = Some(e);
+        } else if changed.contains_key("pacer_rail") {
+            // the usage line below leads with the rails: draw it on the new ones
+            crate::context::redraw(&node.pane, a["agent"].as_str().unwrap_or_default());
         }
     }
     failed.map_or(Ok(()), Err)
@@ -294,7 +302,9 @@ mod tests {
                 "⠀ └─ ○ docs · herdr-pacer ᶜˡᵃᵘᵈᵉ",
                 "⠀ ○ lone · herdr-pacer ᶜˡᵃᵘᵈᵉ",
             ]
-        );
+        );        // the usage line under each runs the rails on, its text under the name
+        let rails: Vec<String> = layout(&nodes).into_iter().map(|p| p.rail).collect();
+        assert_eq!(rails, ["│ ", "│       ", "│  │ ", "  ", "     "]);
     }
 
     #[test]

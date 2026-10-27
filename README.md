@@ -142,17 +142,24 @@ each worker under the agent that started it: its status circle and name, its
 repo, and its account in superscript. A repo's agents sit together, its
 worktrees included. An orchestrator goes by its repo (`gh-dash orch`,
 numbered when one repo runs several), and a worker leaves out the repo its
-parent already shows. The usage bars follow on their own line:
+parent already shows. With the usage on one line, the tree runs on through
+it, the labels in superscript so it fits:
 
 ```
 ● gh-dash orch 1 · ᶜˡᵃᵘᵈᵉ⁻³
+│ ᶜᵗˣ24 ⁵ʰ36 ʷᵏ15
 ├─ ○ api · ᶜˡᵃᵘᵈᵉ
-└─ ● ui-x · ᶜˡᵃᵘᵈᵉ
-   └─ ● docs · herdr-pacer ᶜᵒᵈᵉˣ
-● gh-dash orch 2 · ᶜˡᵃᵘᵈᵉ
-└─ ○ ui-b · ᶜˡᵃᵘᵈᵉ
+│    ᶜᵗˣ21 ⁵ʰ36 ʷᵏ15
+└─ ● docs · herdr-pacer ᶜᵒᵈᵉˣ
+     ᶜᵗˣ29 ʷᵏ98
 ○ claude · gh-dash ᶜˡᵃᵘᵈᵉ
+  ᶜᵗˣ28 ⁵ʰ36 ʷᵏ15
 ```
+
+On stock Herdr a token has one color, so that usage line is plain while
+every window is fine and takes its fullest window's color when one gets high.
+With each metric on its own row, the bars keep their colors and the tree's
+lines pause beside them.
 
 A line that wants attention takes its status color: yellow working, red
 blocked, blue done; idle agents stay plain. An agent nobody started is a row of its own, as is a
