@@ -9,7 +9,7 @@ use toml_edit::{value, Array, ArrayOfTables, DocumentMut, Item, Table};
 
 const TOGGLE: &str = "herdr-pacer.dock-toggle";
 
-fn config_path() -> PathBuf {
+pub(crate) fn config_path() -> PathBuf {
     std::env::var_os("HERDR_CONFIG_PATH").map(PathBuf::from).unwrap_or_else(|| {
         std::env::var_os("XDG_CONFIG_HOME")
             .map_or_else(|| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config"), PathBuf::from)

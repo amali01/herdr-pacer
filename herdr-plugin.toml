@@ -26,6 +26,39 @@ command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" p
 on = "pane.agent_status_changed"
 command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" panes event"]
 
+# Who started whom: each agent's place in the tree, its status and where it
+# runs, and the Agents view sorted by it. A server restart drops both, so
+# startup puts them back; renames and moves redraw where an agent runs.
+[[startup]]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" tree view"]
+
+[[startup]]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" tree sync"]
+
+[[events]]
+on = "pane.agent_detected"
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" tree sync"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" tree sync"]
+
+[[events]]
+on = "pane.closed"
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" tree sync"]
+
+[[events]]
+on = "pane.moved"
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" tree sync"]
+
+[[events]]
+on = "tab.renamed"
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" tree sync"]
+
+[[events]]
+on = "workspace.renamed"
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" tree sync"]
+
 # The usage dock: a pane along the bottom of every tab. Tabs dock when they are
 # created or visited, so a restored session heals as you move around.
 [[events]]

@@ -100,7 +100,10 @@ fn group(prefix: &str, glued: bool, glue: bool) -> String {
 /// `[ui.sidebar.agents] rows` for the chosen layout. Rows of metrics that are
 /// switched off stay: Herdr hides a row whose tokens are all unreported.
 pub fn rows_toml(s: &Settings, glue: bool) -> String {
-    let mut rows = vec![r#"["state_icon", "machine", "workspace", "tab"]"#.to_string(), r#"["agent"]"#.to_string()];
+    // the agent tree: its line in the status color, its details wrapped below
+    let line = crate::tree::STATES.map(|(state, _, fg)| format!("{{ token = \"$pacer_tree_{state}\", fg = \"{fg}\", bold = true }}"));
+    let mut rows = vec![format!("[{}]", line.join(", "))];
+    rows.extend(crate::tree::WHERE.map(|t| format!("[{{ token = \"${t}\", dim = true }}]")));
     let groups: Vec<String> = METRICS.iter().enumerate().map(|(i, m)| group(m.1, s.one_line && i > 0, glue)).collect();
     match s.one_line {
         true => rows.push(format!("[{}]", groups.iter().map(|g| &g[1..g.len() - 1]).collect::<Vec<_>>().join(", "))),
@@ -553,7 +556,7 @@ mod tests {
             assert_eq!(text.contains("glue"), glue, "stock Herdr rejects the whole file over glue");
             let doc: toml_edit::DocumentMut = text.parse().expect("valid TOML");
             let rows = doc["ui"]["sidebar"]["agents"]["rows"].as_array().unwrap();
-            assert_eq!(rows.len(), if one_line { 3 } else { 5 });
+            assert_eq!(rows.len(), if one_line { 5 } else { 7 });
             assert!(rows.iter().all(|r| r.as_array().unwrap().len() <= 16));
         }
     }

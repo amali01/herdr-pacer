@@ -128,6 +128,40 @@ the segments are drawn by the same binary from the same cache as the dock.
 - **Never waits.** A segment prints from the cache; when that is stale it
   starts a fetch in the background and shows the numbers it has.
 
+### The agent tree
+
+An orchestrator that starts other agents can show who started whom. It names
+itself as the parent on the worker's pane before it starts the worker:
+
+```sh
+herdr pane report-metadata <pane> --source orchestrator --token pacer_parent=$HERDR_PANE_ID
+```
+
+The Agents list (its header reads `tree`) then draws the tree: each worker
+under the agent that started it, its status circle beside its name, and below
+it where it runs and which agent it is. A worker leaves out the workspace and
+tab its parent already shows, and long details wrap rather than get cut:
+
+```
+● orch
+│ herdr-pacer · build
+│ claude
+├─ ○ api
+│    claude
+└─ ● ui-x
+   │ claude
+   ├─ ○ ui-b
+   │    claude
+   └─ ● docs
+        2 · codex
+```
+
+A line takes its agent's status color: green idle, yellow working, red
+blocked, blue done. An agent nobody started is a row of its own, as is a
+worker whose parent has closed. The tree sort stays out of the way when
+`[ui] agent_panel_sort` is `"priority"`. Known limit: restarting the Herdr
+server forgets who started whom; agents started after that line up again.
+
 ### Settings
 
 `⚙` on the dock (or the `herdr-pacer.settings` action) opens a popup; click an
@@ -300,6 +334,7 @@ anyone can list. The OpenCode database is opened read-only.
 | `src/settings.rs` | What the dock and the sidebar show, as `settings.json` |
 | `src/panel.rs` | The settings popup (`herdr-pacer settings`) |
 | `src/tabbar.rs` | The tab bar segments (`herdr-pacer tabbar <agent>`) |
+| `src/tree.rs` | The agent tree: each agent's tree line and the Agents sort (`herdr-pacer tree sync` / `view`) |
 | `src/setup.rs` | One-command setup |
 | `src/upgrade.rs` | `update` (installs only a newer version) and the once-per-version migration |
 | `claude-statusline.sh` | A shim for statusLines wrapped by the shell-script versions |
@@ -310,7 +345,7 @@ anyone can list. The OpenCode database is opened read-only.
 
 `cargo test` covers the bar and its thickness, the thresholds, reset-time
 parsing, the Codex limits, the dock's layout math and how its strip narrows,
-the sidebar tokens and rows in both layouts, the settings file and popup, the
+the sidebar tokens and rows in both layouts, the agent tree, the settings file and popup, the
 statusLine quoting, the `config.toml` migration, and Claude accounts: their
 keychain names, titles, and which windows a session on each one shows.
 

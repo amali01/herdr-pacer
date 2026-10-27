@@ -10,6 +10,7 @@ mod panel;
 mod settings;
 mod setup;
 mod tabbar;
+mod tree;
 mod tui;
 mod upgrade;
 mod usage;
@@ -25,6 +26,7 @@ const USAGE: &str = "usage: herdr-pacer <command>
   claude-hook install|remove|status
   panes sweep | pane <pane_id> [agent] | event
                             context bars for Codex and OpenCode
+  tree sync | view          who started whom in the Agents sidebar (hooks)
   fetch                     refresh the usage cache now
   setup                     wrap the statusLine, patch config.toml, reload, dock
   update                    install the published version if it is newer
@@ -56,6 +58,11 @@ fn main() {
             upgrade::migrate(false);
             context::panes(&args[1..]).unwrap_or_else(fail)
         }
+        Some("tree") => match args.get(1).map(String::as_str) {
+            Some("sync") => tree::sync().unwrap_or_else(|e| fail(e.to_string())),
+            Some("view") => tree::view().unwrap_or_else(|e| fail(e.to_string())),
+            _ => fail("usage: herdr-pacer tree sync | view".into()),
+        },
         Some("fetch") => usage::fetch(true),
         Some("setup") => setup::run().unwrap_or_else(fail),
         Some("update") => match upgrade::update() {
