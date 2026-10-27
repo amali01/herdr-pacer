@@ -157,13 +157,21 @@ runs on through it, the labels in superscript so it fits:
 ```
 
 The colors are Herdr's: the circle is the one it draws, in your theme's
-status colors, and the name takes the color Herdr gives agent names.
-Stock Herdr puts ` · ` between any two tokens except after its circle, so
-a branch meets the circle across a dot in the tree's own gray. A token has
-one color, so the usage line is gray while every window is fine and takes
-the theme's peach, yellow or red as its fullest window gets high. With each
-metric on its own row, the bars keep their colors and the tree's lines pause
-beside them.
+status colors, and the name takes the color Herdr gives agent names. Stock
+Herdr puts ` · ` between any two tokens except after its circle, so a
+branch meets the circle across a dot in the tree's own gray, and the tree's
+lines lead each usage row as a token of their own, so they stay gray
+whatever color the usage takes. A bar that would not fit after them shows
+as its percentage alone. The one-line usage is gray while every window is
+fine and takes the theme's peach, yellow or red as its fullest window gets
+high.
+
+Claude Code's own subagents run inside its process, so Herdr never lists
+them. `claude-hook install` (which `setup` runs) also adds Claude's
+SubagentStart and SubagentStop hooks, async, beside any of yours; each
+running subagent then gets a line under its agent, `└ ⁺ Explore`, up to
+three and then a count. One whose stop never comes drops off after six
+hours. `claude-hook remove` takes the hooks out again.
 
 An agent nobody started is a row of its own, as is a
 worker whose parent has closed. The tree sort stays out of the way when

@@ -27,6 +27,9 @@ use crate::herdr::{self, call};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 
+/// The rows an agent's subagents take; past the last, a count.
+pub const SUBS: [&str; 3] = ["pacer_sub1", "pacer_sub2", "pacer_sub3"];
+
 struct Node {
     pane: String,
     label: String,
@@ -36,15 +39,21 @@ struct Node {
     repo: Option<String>,
     repo_key: Option<String>,
     account: Option<String>,
+    /// Claude Code's own subagents running inside it, oldest first
+    subs: Vec<String>,
 }
 
 /// An agent's place: the parent it is drawn under, what leads its circle (the
-/// rails and its branch, none for a root), what leads the usage line below
-/// it (`rail`, the rails running on), and its sort key.
+/// rails and its branch, none for a root), the tree's lines that lead the
+/// rows below it (`rail`: the rails running on), and its sort key.
 #[derive(Clone, Debug, Default, PartialEq)]
 struct Place {
     up: Option<usize>,
     head: String,
+    /// what leads a branch under it: its children's and its subagents'
+    cont: String,
+    /// whether agents of its own hang under it, after its subagents
+    children: bool,
     rail: String,
     key: String,
 }
@@ -89,12 +98,12 @@ fn layout(nodes: &[Node]) -> Vec<Place> {
                 stack.push((c, Some(n), cont.clone(), Some(k + 1 == kids.len()), format!("{key}.{c:04}")));
             }
             // under the name: a root's starts where Herdr starts the row
-            let rail = match (cont.is_empty(), kids.is_empty()) {
-                (true, true) => String::new(),
-                (_, true) => format!("{cont}  "),
-                (_, false) => format!("{cont}│ "),
+            // its own line runs down from its circle when anything hangs under it
+            let rail = match kids.is_empty() && nodes[n].subs.is_empty() {
+                true => cont.clone(),
+                false => format!("{cont}│"),
             };
-            out[n] = Place { up, head: format!("{prefix}{branch}"), rail, key };
+            out[n] = Place { up, head: format!("{prefix}{branch}"), cont, children: !kids.is_empty(), rail, key };
         }
     }
     out
@@ -160,9 +169,26 @@ fn tokens(p: &Place, n: &Node, name: &str, repo: Option<&str>) -> Map<String, Va
     map.insert("pacer_name".into(), name.into());
     let with: Vec<String> = repo.map(String::from).into_iter().chain(n.account.as_deref().map(tiny)).collect();
     map.insert("pacer_repo".into(), if with.is_empty() { Value::Null } else { with.join(" ").into() });
-    // Herdr trims a token's spaces at both ends; braille blanks it keeps
-    map.insert("pacer_rail".into(), p.rail.replace(' ', "⠀").into());
+    // the usage rows lead with them in a token of their own, so the tree stays
+    // gray whatever color the usage takes; Herdr trims a token's spaces at
+    // both ends, braille blanks it keeps
+    let lines = (!p.rail.is_empty()).then(|| p.rail.replace(' ', "⠀"));
+    map.insert("pacer_lines".into(), lines.map_or(Value::Null, Value::from));
     map.insert("pacer_tree_key".into(), p.key.clone().into());
+    // its subagents branch off under its usage, before its own children's entries
+    let mut subs: Vec<String> = n.subs.iter().map(|s| format!("⁺ {s}")).collect();
+    if subs.len() > SUBS.len() {
+        let more = subs.len() - (SUBS.len() - 1);
+        subs.truncate(SUBS.len() - 1);
+        subs.push(format!("⁺ {more} more"));
+    }
+    for (i, token) in SUBS.iter().enumerate() {
+        let line = subs.get(i).map(|s| {
+            let last = i + 1 == subs.len() && !p.children;
+            lead(format!("{}{} {s}", p.cont, if last { "└" } else { "├" }))
+        });
+        map.insert(token.to_string(), line.map_or(Value::Null, Value::from));
+    }
     map
 }
 
@@ -208,9 +234,11 @@ pub fn sync() -> herdr::Result<()> {
                 repo,
                 repo_key,
                 account: text(a, "display_agent").or_else(|| text(a, "agent")),
+                subs: running(&text(a, "pane_id").unwrap_or_default()),
             }
         })
         .collect();
+    forget_closed(&nodes);
     let mut places = layout(&nodes);
     if priority() {
         // Herdr orders by attention, not by the tree: no branches to mislead,
@@ -227,12 +255,86 @@ pub fn sync() -> herdr::Result<()> {
         // a pane that closed since the list fails alone; the rest still update
         if let Err(e) = herdr::report_tokens(&node.pane, Value::Object(changed.clone()), None) {
             failed = Some(e);
-        } else if changed.contains_key("pacer_rail") {
-            // the usage line below leads with the rails: draw it on the new ones
+        } else if changed.contains_key("pacer_lines") {
+            // the room the usage rows have changed: a bar may fit, or not
             crate::context::redraw(&node.pane, a["agent"].as_str().unwrap_or_default());
         }
     }
     failed.map_or(Ok(()), Err)
+}
+
+// ── Claude Code's subagents ──
+//
+// They run inside Claude's own process, so Herdr never lists them. Claude's
+// SubagentStart and SubagentStop hooks (`herdr-pacer subagent start|stop`,
+// which `claude-hook install` adds) keep each pane's running ones in a file,
+// and the tree lists them under their agent.
+
+/// How long a subagent whose stop never came stays listed.
+const SUB_TTL: i64 = 6 * 3600;
+
+fn subs_file(pane: &str) -> std::path::PathBuf {
+    crate::usage::state_dir().join(format!("subagents-{pane}.json"))
+}
+
+fn subs_of(pane: &str) -> Map<String, Value> {
+    std::fs::read_to_string(subs_file(pane)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+}
+
+/// A pane's running subagents, by type, oldest first.
+fn running(pane: &str) -> Vec<String> {
+    let mut subs: Vec<(i64, String)> =
+        subs_of(pane).values().filter_map(|v| Some((v["at"].as_i64()?, v["type"].as_str()?.to_string()))).collect();
+    subs.sort();
+    subs.into_iter().filter(|s| s.0 > crate::usage::now() - SUB_TTL).map(|s| s.1).collect()
+}
+
+/// A subagent started (with its type) or stopped, in a pane's list. Claude
+/// also stops agents of its own that never started under a type; those, and
+/// ones past their time, are dropped.
+fn note(subs: &mut Map<String, Value>, id: &str, kind: Option<&str>, now: i64) {
+    match kind.filter(|k| !k.is_empty()) {
+        Some(kind) => drop(subs.insert(id.into(), json!({ "type": kind, "at": now }))),
+        None => drop(subs.remove(id)),
+    }
+    subs.retain(|_, v| v["at"].as_i64().is_some_and(|at| at > now - SUB_TTL));
+}
+
+/// `subagent start|stop`, a Claude hook: the payload on stdin.
+pub fn subagent(event: &str) -> Result<(), String> {
+    let start = match event {
+        "start" => true,
+        "stop" => false,
+        _ => return Err("usage: herdr-pacer subagent start | stop".into()),
+    };
+    let Ok(pane) = std::env::var("HERDR_PANE_ID") else { return Ok(()) }; // Claude outside Herdr
+    let mut payload = String::new();
+    let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut payload);
+    let hook: Value = serde_json::from_str(&payload).unwrap_or_default();
+    let Some(id) = hook["agent_id"].as_str() else { return Ok(()) };
+    {
+        // parallel subagents start together: one read-modify-write at a time
+        let lock = std::fs::File::create(crate::usage::state_dir().join("subagents.lock")).ok();
+        let _held = lock.as_ref().map(|f| f.lock());
+        let mut subs = subs_of(&pane);
+        note(&mut subs, id, if start { hook["agent_type"].as_str() } else { None }, crate::usage::now());
+        let _ = match subs.is_empty() {
+            true => std::fs::remove_file(subs_file(&pane)),
+            false => std::fs::write(subs_file(&pane), Value::Object(subs).to_string()),
+        };
+    }
+    sync().map_err(|e| e.to_string())
+}
+
+/// A closed pane's list goes with it.
+fn forget_closed(nodes: &[Node]) {
+    for file in std::fs::read_dir(crate::usage::state_dir()).into_iter().flatten().flatten() {
+        let name = file.file_name().to_string_lossy().into_owned();
+        let pane = name.strip_prefix("subagents-").and_then(|n| n.strip_suffix(".json"));
+        if pane.is_some_and(|p| !nodes.iter().any(|n| n.pane == p)) {
+            let _ = std::fs::remove_file(file.path());
+        }
+    }
 }
 
 /// Whether the user picked the attention-queue order for the Agents view.
@@ -259,7 +361,7 @@ mod tests {
 
     fn node(pane: &str, label: &str, parent: Option<&str>) -> Node {
         let (repo, repo_key, account) = (Some("gh-dash".into()), Some("/gh-dash/.git".into()), Some("claude".into()));
-        Node { pane: pane.into(), label: label.into(), parent: parent.map(String::from), repo, repo_key, account }
+        Node { pane: pane.into(), label: label.into(), parent: parent.map(String::from), repo, repo_key, account, subs: vec![] }
     }
 
     fn in_repo(mut n: Node, repo: &str) -> Node {
@@ -306,7 +408,7 @@ mod tests {
         );
         // the usage line under each runs the rails on, its text under the name
         let rails: Vec<String> = layout(&nodes).into_iter().map(|p| p.rail).collect();
-        assert_eq!(rails, ["│ ", "│         ", "│   │ ", "", "      "]);
+        assert_eq!(rails, ["│", "│       ", "│   │", "", "    "]);
     }
 
     #[test]
@@ -330,6 +432,34 @@ mod tests {
                 "○ other · herdr-pacer ᶜˡᵃᵘᵈᵉ",
             ]
         );
+    }
+
+    #[test]
+    fn subagents_branch_off_under_their_agent_before_its_children() {
+        let mut nodes = [node("p1", "orch", None), node("p2", "ui", Some("p1")), node("p3", "lone", None)];
+        nodes[1].subs = vec!["Explore".into(), "goldfish-reviewer".into()];
+        nodes[2].subs = vec!["a".into(), "b".into(), "c".into(), "d".into()];
+        let places = layout(&nodes);
+        let maps = draw(&nodes, &places);
+        let subs = |i: usize| SUBS.iter().filter_map(|t| maps[i][*t].as_str().map(String::from)).collect::<Vec<_>>();
+        assert_eq!(subs(1), ["⠀   ├ ⁺ Explore", "⠀   └ ⁺ goldfish-reviewer"], "under ui's circle");
+        assert_eq!(places[1].rail, "    │", "its line runs down to them");
+        assert_eq!(subs(2), ["├ ⁺ a", "├ ⁺ b", "└ ⁺ 2 more"], "past three, a count");
+        assert!(subs(0).is_empty() && places[0].rail == "│");
+    }
+
+    #[test]
+    fn a_subagent_is_listed_from_its_start_to_its_stop() {
+        let mut subs = Map::new();
+        note(&mut subs, "a1", Some("Explore"), 1000);
+        note(&mut subs, "a2", Some("Plan"), 1001);
+        note(&mut subs, "x", Some(""), 1002);
+        assert_eq!(subs.len(), 2, "Claude's own untyped agents are not listed");
+        note(&mut subs, "a1", None, 1003);
+        note(&mut subs, "never-started", None, 1004);
+        assert_eq!(subs.keys().collect::<Vec<_>>(), ["a2"]);
+        note(&mut subs, "a3", Some("Explore"), 1001 + SUB_TTL);
+        assert_eq!(subs.keys().collect::<Vec<_>>(), ["a3"], "one whose stop never came goes in time");
     }
 
     #[test]
