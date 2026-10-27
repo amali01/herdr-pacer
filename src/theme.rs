@@ -59,7 +59,9 @@ fn canonical(name: &str) -> &'static str {
 pub fn of(theme: Option<&toml_edit::Item>) -> Palette {
     let name = canonical(theme.and_then(|t| t.get("name")).and_then(|n| n.as_str()).unwrap_or("catppuccin"));
     let base = THEMES.iter().find(|t| t.0 == name).map(|t| t.1.map(String::from));
-    let custom = |k: &str| theme?.get("custom")?.get(k)?.as_str().filter(|c| c.starts_with('#')).map(String::from);
+    // only the hex a sidebar `fg` takes: anything else would make Herdr refuse the whole config
+    let hex = |c: &&str| c.strip_prefix('#').is_some_and(|h| matches!(h.len(), 3 | 6) && h.chars().all(|d| d.is_ascii_hexdigit()));
+    let custom = |k: &str| theme?.get("custom")?.get(k)?.as_str().filter(hex).map(String::from);
     let pick = |i: usize, k: &str| custom(k).or_else(|| base.as_ref().map(|b| b[i].clone()));
     Palette { subtext0: pick(0, "subtext0"), peach: pick(1, "peach"), yellow: pick(2, "yellow"), red: pick(3, "red") }
 }
@@ -86,7 +88,8 @@ mod tests {
         assert_eq!(theme("[theme]\nname = \"Rose Pine\"\n").subtext0.as_deref(), Some("#c8c5dc"));
         assert_eq!(theme("").subtext0.as_deref(), Some("#a6adc8"), "catppuccin when none is named");
         assert_eq!(theme("[theme]\nname = \"terminal\"\n"), Palette::default(), "the terminal's own palette");
-        let custom = theme("[theme]\nname = \"nord\"\n[theme.custom]\nred = \"#123456\"\nyellow = \"yellow\"\n");
+        let custom = theme("[theme]\nname = \"nord\"\n[theme.custom]\nred = \"#123456\"\nyellow = \"yellow\"\npeach = \"#oops\\\"\"\nsubtext0 = \"#abc\"\n");
         assert_eq!((custom.red.as_deref(), custom.yellow.as_deref()), (Some("#123456"), Some("#ebcb8b")), "only hex overrides");
+        assert_eq!((custom.peach.as_deref(), custom.subtext0.as_deref()), (Some("#d08770"), Some("#abc")), "malformed hex never reaches the rows");
     }
 }

@@ -88,7 +88,12 @@ fn layout(nodes: &[Node]) -> Vec<Place> {
             for (k, &c) in kids.iter().enumerate().rev() {
                 stack.push((c, Some(n), cont.clone(), Some(k + 1 == kids.len()), format!("{key}.{c:04}")));
             }
-            let rail = format!("{cont}{}", if kids.is_empty() { "  " } else { "│ " });
+            // under the name: a root's starts where Herdr starts the row
+            let rail = match (cont.is_empty(), kids.is_empty()) {
+                (true, true) => String::new(),
+                (_, true) => format!("{cont}  "),
+                (_, false) => format!("{cont}│ "),
+            };
             out[n] = Place { up, head: format!("{prefix}{branch}"), rail, key };
         }
     }
@@ -206,7 +211,7 @@ pub fn sync() -> herdr::Result<()> {
         // Herdr orders by attention, not by the tree: no branches to mislead,
         // and no tree sort left over from before the setting changed
         let _ = view();
-        places.iter_mut().for_each(|p| *p = Place { rail: "  ".into(), key: std::mem::take(&mut p.key), ..Place::default() });
+        places.iter_mut().for_each(|p| *p = Place { key: std::mem::take(&mut p.key), ..Place::default() });
     }
     let mut failed = None;
     for ((want, node), a) in draw(&nodes, &places).into_iter().zip(&nodes).zip(&agents) {
@@ -296,7 +301,7 @@ mod tests {
         );
         // the usage line under each runs the rails on, its text under the name
         let rails: Vec<String> = layout(&nodes).into_iter().map(|p| p.rail).collect();
-        assert_eq!(rails, ["│ ", "│         ", "│   │ ", "  ", "      "]);
+        assert_eq!(rails, ["│ ", "│         ", "│   │ ", "", "      "]);
     }
 
     #[test]
