@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use toml_edit::{value, Array, ArrayOfTables, DocumentMut, Item, Table};
 
 const TOGGLE: &str = "herdr-pacer.dock-toggle";
+const SUBAGENTS: &str = "herdr-pacer.subagents-toggle";
 
 pub(crate) fn config_path() -> PathBuf {
     std::env::var_os("HERDR_CONFIG_PATH").map(PathBuf::from).unwrap_or_else(|| {
@@ -104,6 +105,24 @@ fn patch(doc: &mut DocumentMut) -> Vec<String> {
         notes.push("bound prefix+u / prefix+U to show or hide the dock".into());
     } else if !notes.iter().any(|n| n.contains("dock key") || n.contains("repointed")) {
         notes.push("dock key already bound".into());
+    }
+
+    // prefix+a shows or hides Claude's subagents, unless the user has it
+    let commands = table(doc, &["keys"])["command"].as_array_of_tables_mut().expect("[[keys.command]]");
+    let taken = commands.iter().any(|t| t.get("key").map(keys_of).unwrap_or_default().contains(&"prefix+a".to_string()));
+    let bound = commands.iter().any(|t| t.get("command").and_then(Item::as_str) == Some(SUBAGENTS));
+    match bound {
+        true => notes.push("subagents key already bound".into()),
+        false if taken => notes.push("prefix+a is yours: subagents key left unbound".into()),
+        false => {
+            let mut t = Table::new();
+            t["key"] = value("prefix+a");
+            t["type"] = value("plugin_action");
+            t["command"] = value(SUBAGENTS);
+            t["description"] = value("show or hide Claude's subagents in the Agents list");
+            commands.push(t);
+            notes.push("bound prefix+a to show or hide Claude's subagents".into());
+        }
     }
     notes
 }
@@ -294,7 +313,11 @@ command = "lazygit"
         let mut again: DocumentMut = once.parse().unwrap();
         let notes = patch(&mut again);
         assert_eq!(again.to_string(), once);
-        assert_eq!(notes, ["sidebar bar rows: unchanged", "dock key already bound"]);
+        assert_eq!(notes, ["sidebar bar rows: unchanged", "dock key already bound", "subagents key already bound"]);
+        assert!(once.contains(SUBAGENTS));
+        let mut mine: DocumentMut = "[[keys.command]]\nkey = \"prefix+a\"\ntype = \"shell\"\ncommand = \"htop\"\n".parse().unwrap();
+        assert!(patch(&mut mine).contains(&"prefix+a is yours: subagents key left unbound".to_string()));
+        assert!(!mine.to_string().contains(SUBAGENTS));
     }
 
     #[test]

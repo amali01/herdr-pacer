@@ -177,6 +177,13 @@ to it. It is a view: you watch the subagent there, and message it from its
 parent's session. The pane closes the moment the subagent stops, and the
 tab with its last one. `claude-hook remove` takes the hooks out again.
 
+With several reviews running, each spending many subagents, the list gets
+long: the prefix key then `a` (`ctrl+b a`; setup binds it unless the key is
+yours) takes Claude's subagents out of the Agents list, each agent showing
+how many it has (`● claude ⁺⁴`), and puts them back. A session that only
+uses subagents keeps its own name; `repo orch` is for one that starts
+workers of its own.
+
 An agent nobody started is a row of its own, as is a
 worker whose parent has closed. The tree sort stays out of the way when
 `[ui] agent_panel_sort` is `"priority"`. Known limit: restarting the Herdr

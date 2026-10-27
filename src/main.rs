@@ -35,6 +35,7 @@ const USAGE: &str = "usage: herdr-pacer <command>
   tree sync | view          who started whom in the Agents sidebar (hooks)
   subagent start|stop       a Claude subagent began or ended (Claude hooks)
   subview                   a Claude subagent's live view (its pane runs it)
+  subagents toggle          take Claude's subagents out of the Agents list, or back
   fetch                     refresh the usage cache now
   setup                     wrap the statusLine, patch config.toml, reload, dock
   update                    install the published version if it is newer
@@ -71,6 +72,7 @@ fn main() {
             Some("view") => tree::view().unwrap_or_else(|e| fail(e.to_string())),
             _ => fail("usage: herdr-pacer tree sync | view".into()),
         },
+        Some("subagents") if args.get(1).map(String::as_str) == Some("toggle") => tree::toggle_subagents().unwrap_or_else(|e| fail(e.to_string())),
         Some("subview") => subview::run().unwrap_or_else(fail),
         Some("subagent") => tree::subagent(args.get(1).map_or("", String::as_str)).unwrap_or_else(fail),
         Some("fetch") => usage::fetch(true),

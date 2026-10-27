@@ -36,6 +36,10 @@ struct Node {
     repo: Option<String>,
     repo_key: Option<String>,
     account: Option<String>,
+    /// a Claude subagent's view (subview.rs)
+    sub: bool,
+    /// with subagents hidden, how many hang under it
+    hidden: usize,
 }
 
 /// An agent's place: the parent it is drawn under, what leads its circle (the
@@ -47,6 +51,27 @@ struct Place {
     head: String,
     rail: String,
     key: String,
+}
+
+/// With subagents hidden: how many hang under each agent, its own and
+/// theirs, counted on the nearest agent that is not one.
+fn fold(nodes: &[&Node]) -> Vec<usize> {
+    let at = |pane: &str| nodes.iter().position(|n| n.pane == pane);
+    let mut counts = vec![0; nodes.len()];
+    for n in nodes.iter().filter(|n| n.sub) {
+        let mut up = n.parent.as_deref().and_then(at);
+        // a loop of subagents counts nowhere
+        for _ in 0..nodes.len() {
+            match up {
+                Some(u) if nodes[u].sub => up = nodes[u].parent.as_deref().and_then(at),
+                _ => break,
+            }
+        }
+        if let Some(u) = up.filter(|&u| !nodes[u].sub) {
+            counts[u] += 1;
+        }
+    }
+    counts
 }
 
 /// Each agent's place, in agent.list order. Keys are fixed-width positions
@@ -116,9 +141,10 @@ pub fn tiny(s: &str) -> String {
 }
 
 /// The name an orchestrator (a root with workers) goes by: its repo, and a
-/// number when the repo has more than one. None for every other agent.
+/// number when the repo has more than one. None for every other agent; a
+/// Claude subagent is no worker, so using one makes no orchestrator.
 fn orchestrators(nodes: &[Node], places: &[Place]) -> Vec<Option<String>> {
-    let orch = |i: usize| places[i].up.is_none() && nodes[i].repo.is_some() && places.iter().any(|p| p.up == Some(i));
+    let orch = |i: usize| places[i].up.is_none() && nodes[i].repo.is_some() && (0..nodes.len()).any(|c| places[c].up == Some(i) && !nodes[c].sub);
     let mut all: Vec<usize> = (0..nodes.len()).filter(|&i| orch(i)).collect();
     all.sort_by_key(|&i| &places[i].key);
     (0..nodes.len())
@@ -157,6 +183,10 @@ fn tokens(p: &Place, n: &Node, name: &str, repo: Option<&str>) -> Map<String, Va
     // two cells left of where a row's later lines start
     let branch = (!p.head.is_empty()).then(|| lead(format!("  {}", p.head)));
     map.insert("pacer_branch".into(), branch.map_or(Value::Null, Value::from));
+    let name = match n.hidden {
+        0 => name.to_string(),
+        count => format!("{name} ⁺{}", tiny(&count.to_string())),
+    };
     map.insert("pacer_name".into(), name.into());
     let with: Vec<String> = repo.map(String::from).into_iter().chain(n.account.as_deref().map(tiny)).collect();
     map.insert("pacer_repo".into(), if with.is_empty() { Value::Null } else { with.join(" ").into() });
@@ -212,10 +242,20 @@ pub fn sync() -> herdr::Result<()> {
                 repo,
                 repo_key,
                 account: text(a, "display_agent").or_else(|| text(a, "agent")),
+                sub: a["tokens"]["pacer_task"].is_string(),
+                hidden: 0,
             }
         })
         .collect();
     forget_closed(&nodes);
+    // subagents hidden: Herdr's view leaves them out, the tree draws without them
+    let mut listed: Vec<(Node, &Value)> = nodes.into_iter().zip(&agents).collect();
+    if subagents_hidden() {
+        let counts = fold(&listed.iter().map(|l| &l.0).collect::<Vec<_>>());
+        listed.iter_mut().zip(counts).for_each(|(l, c)| l.0.hidden = c);
+        listed.retain(|l| !l.0.sub);
+    }
+    let (nodes, agents): (Vec<Node>, Vec<&Value>) = listed.into_iter().unzip();
     let mut places = layout(&nodes);
     if priority() {
         // Herdr orders by attention, not by the tree: no branches to mislead,
@@ -405,17 +445,43 @@ fn priority() -> bool {
     ui("agent_panel_sort").is_some_and(|s| s.as_str() == Some("priority"))
 }
 
-/// Sorts the Agents view by the tree, or hands it back to Herdr when the
-/// user picked the attention-queue order (`agent_panel_sort = "priority"`).
+fn hidden_file() -> std::path::PathBuf {
+    crate::usage::state_dir().join("subagents-hidden")
+}
+
+/// Whether the user has Claude's subagents out of the Agents list.
+fn subagents_hidden() -> bool {
+    hidden_file().exists()
+}
+
+/// `subagents toggle`: takes Claude's subagents out of the Agents list, each
+/// parent showing how many it has, or puts them back.
+pub fn toggle_subagents() -> herdr::Result<()> {
+    let _ = match subagents_hidden() {
+        true => std::fs::remove_file(hidden_file()),
+        false => std::fs::write(hidden_file(), ""),
+    };
+    view()?;
+    sync()
+}
+
+/// Sorts the Agents view by the tree, or hands the order back to Herdr when
+/// the user picked the attention queue (`agent_panel_sort = "priority"`);
+/// either way leaves Claude's subagents out while they are hidden.
 pub fn view() -> herdr::Result<()> {
+    let source = "plugin:herdr-pacer";
+    let filter = subagents_hidden().then(|| json!({ "op": "not", "filter": { "op": "exists", "field": { "token": "pacer_task" } } }));
     if priority() {
-        return call("agent.view.clear", json!({ "source": "plugin:herdr-pacer" })).map(drop);
+        return match filter {
+            Some(filter) => call("agent.view.set", json!({ "source": source, "label": "no subagents", "filter": filter })).map(drop),
+            None => call("agent.view.clear", json!({ "source": source })).map(drop),
+        };
     }
     let sort = [json!({ "field": { "token": "pacer_tree_key" }, "order": "asc" })]
         .into_iter()
         .chain(["workspace_order", "tab_order", "pane_order"].map(|f| json!({ "field": f, "order": "asc" })))
         .collect::<Vec<_>>();
-    call("agent.view.set", json!({ "source": "plugin:herdr-pacer", "label": "tree", "sort": sort })).map(drop)
+    call("agent.view.set", json!({ "source": source, "label": "tree", "sort": sort, "filter": filter })).map(drop)
 }
 
 #[cfg(test)]
@@ -424,7 +490,7 @@ mod tests {
 
     fn node(pane: &str, label: &str, parent: Option<&str>) -> Node {
         let (repo, repo_key, account) = (Some("gh-dash".into()), Some("/gh-dash/.git".into()), Some("claude".into()));
-        Node { pane: pane.into(), label: label.into(), parent: parent.map(String::from), repo, repo_key, account }
+        Node { pane: pane.into(), label: label.into(), parent: parent.map(String::from), repo, repo_key, account, sub: false, hidden: 0 }
     }
 
     fn in_repo(mut n: Node, repo: &str) -> Node {
@@ -495,6 +561,24 @@ mod tests {
                 "○ other · herdr-pacer ᶜˡᵃᵘᵈᵉ",
             ]
         );
+    }
+
+    #[test]
+    fn hidden_subagents_are_counted_on_the_agent_above_them() {
+        let mut nodes = [node("o", "orch", None), node("s1", "a", Some("o")), node("s2", "b", Some("s1")), node("w", "worker", Some("o")), node("s3", "c", Some("w"))];
+        for i in [1, 2, 4] {
+            nodes[i].sub = true;
+        }
+        let refs: Vec<&Node> = nodes.iter().collect();
+        assert_eq!(fold(&refs), [2, 0, 0, 1, 0], "a subagent's own subagent counts on the agent above both");
+        nodes[0].hidden = 2;
+        assert_eq!(tokens(&Place::default(), &nodes[0], "orch", None)["pacer_name"], "orch ⁺²");
+        // a session using subagents is no orchestrator; one starting workers is
+        let solo = [node("c", "claude", None), node("s", "a", Some("c"))];
+        let mut solo = solo;
+        solo[1].sub = true;
+        assert_eq!(orchestrators(&solo, &layout(&solo))[0], None);
+        assert_eq!(orchestrators(&nodes, &layout(&nodes))[0].as_deref(), Some("gh-dash orch"));
     }
 
     #[test]

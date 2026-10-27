@@ -85,6 +85,11 @@ title = "Show or hide the usage dock"
 command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" toggle"]
 
 [[actions]]
+id = "subagents-toggle"
+title = "Show or hide Claude's subagents in the Agents list"
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" subagents toggle"]
+
+[[actions]]
 id = "settings"
 title = "Usage dock and sidebar settings"
 command = ["sh", "-c", "exec \"$HERDR_BIN_PATH\" plugin pane open --plugin herdr-pacer --entrypoint settings --focus"]
