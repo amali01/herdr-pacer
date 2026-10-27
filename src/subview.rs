@@ -16,6 +16,8 @@ pub fn run() -> Result<(), String> {
     let (mut read, mut named, mut shown, mut tasked, mut placed) = (0u64, None::<String>, None, false, String::new());
     // an agent in Herdr's list
     call("pane.report_agent", json!({ "pane_id": me, "source": "herdr-pacer", "agent": "claude", "state": "working" })).map_err(|e| e.to_string())?;
+    // known as a subagent from the first moment, so hiding them takes it too
+    crate::herdr::report_tokens(&me, json!({ "pacer_sub": "1" }), None).map_err(|e| e.to_string())?;
     loop {
         let summary: Value = std::fs::read_to_string(&meta).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
         // named by its task, its type until Claude writes the task down; a

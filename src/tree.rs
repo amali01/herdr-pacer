@@ -242,7 +242,7 @@ pub fn sync() -> herdr::Result<()> {
                 repo,
                 repo_key,
                 account: text(a, "display_agent").or_else(|| text(a, "agent")),
-                sub: a["tokens"]["pacer_task"].is_string(),
+                sub: a["tokens"]["pacer_sub"].is_string(),
                 hidden: 0,
             }
         })
@@ -457,11 +457,17 @@ fn subagents_hidden() -> bool {
 /// `subagents toggle`: takes Claude's subagents out of the Agents list, each
 /// parent showing how many it has, or puts them back.
 pub fn toggle_subagents() -> herdr::Result<()> {
-    let _ = match subagents_hidden() {
-        true => std::fs::remove_file(hidden_file()),
-        false => std::fs::write(hidden_file(), ""),
+    let flip = |hide: bool| match hide {
+        true => std::fs::write(hidden_file(), ""),
+        false => std::fs::remove_file(hidden_file()),
     };
-    view()?;
+    let hide = !subagents_hidden();
+    flip(hide).map_err(|e| herdr::Error(format!("{}: {e}", hidden_file().display())))?;
+    // what Herdr shows and what is saved stay the same: undone when Herdr says no
+    if let Err(e) = view() {
+        let _ = flip(!hide);
+        return Err(e);
+    }
     sync()
 }
 
@@ -470,7 +476,7 @@ pub fn toggle_subagents() -> herdr::Result<()> {
 /// either way leaves Claude's subagents out while they are hidden.
 pub fn view() -> herdr::Result<()> {
     let source = "plugin:herdr-pacer";
-    let filter = subagents_hidden().then(|| json!({ "op": "not", "filter": { "op": "exists", "field": { "token": "pacer_task" } } }));
+    let filter = subagents_hidden().then(|| json!({ "op": "not", "filter": { "op": "exists", "field": { "token": "pacer_sub" } } }));
     if priority() {
         return match filter {
             Some(filter) => call("agent.view.set", json!({ "source": source, "label": "no subagents", "filter": filter })).map(drop),
