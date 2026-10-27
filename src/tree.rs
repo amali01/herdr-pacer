@@ -38,6 +38,8 @@ struct Node {
     account: Option<String>,
     /// a Claude subagent's view (subview.rs)
     sub: bool,
+    /// whether it has a name of its own, not just its harness's (claude, codex)
+    named: bool,
     /// with subagents hidden, how many hang under it
     hidden: usize,
 }
@@ -140,20 +142,28 @@ pub fn tiny(s: &str) -> String {
     s.chars().map(|c| c.to_ascii_lowercase()).map(|c| from.chars().zip(to.chars()).find(|f| f.0 == c).map_or(c, |f| f.1)).collect()
 }
 
-/// The name an orchestrator (a root with workers) goes by: its repo, and a
-/// number when the repo has more than one. None for every other agent; a
-/// Claude subagent is no worker, so using one makes no orchestrator.
-fn orchestrators(nodes: &[Node], places: &[Place]) -> Vec<Option<String>> {
-    let orch = |i: usize| places[i].up.is_none() && nodes[i].repo.is_some() && (0..nodes.len()).any(|c| places[c].up == Some(i) && !nodes[c].sub);
-    let mut all: Vec<usize> = (0..nodes.len()).filter(|&i| orch(i)).collect();
+/// The name a root goes by when its own says too little: an orchestrator
+/// (a root with workers) its repo and "orch"; a session nobody named, which
+/// Herdr calls by its harness (claude, codex), its repo. Numbered when a repo
+/// has more than one of a kind. None for every other agent; a Claude subagent
+/// is no worker, so using one makes no orchestrator.
+fn root_names(nodes: &[Node], places: &[Place]) -> Vec<Option<String>> {
+    let root = |i: usize| places[i].up.is_none() && nodes[i].repo.is_some();
+    let orch = |i: usize| root(i) && (0..nodes.len()).any(|c| places[c].up == Some(i) && !nodes[c].sub);
+    let kind = |i: usize| match (orch(i), root(i) && !nodes[i].named) {
+        (true, _) => Some(" orch"),
+        (false, true) => Some(""),
+        _ => None,
+    };
+    let mut all: Vec<usize> = (0..nodes.len()).filter(|&i| kind(i).is_some()).collect();
     all.sort_by_key(|&i| &places[i].key);
     (0..nodes.len())
         .map(|i| {
-            let repo = nodes[i].repo.as_deref().filter(|_| orch(i))?;
-            let same: Vec<usize> = all.iter().copied().filter(|&j| nodes[j].repo_key == nodes[i].repo_key).collect();
+            let (repo, of) = (nodes[i].repo.as_deref()?, kind(i)?);
+            let same: Vec<usize> = all.iter().copied().filter(|&j| nodes[j].repo_key == nodes[i].repo_key && kind(j) == Some(of)).collect();
             Some(match same.iter().position(|&j| j == i) {
-                Some(k) if same.len() > 1 => format!("{repo} orch {}", k + 1),
-                _ => format!("{repo} orch"),
+                Some(k) if same.len() > 1 => format!("{repo}{of} {}", k + 1),
+                _ => format!("{repo}{of}"),
             })
         })
         .collect()
@@ -162,7 +172,7 @@ fn orchestrators(nodes: &[Node], places: &[Place]) -> Vec<Option<String>> {
 /// Every agent's tokens, in agent.list order. Its repo shows unless its name
 /// carries it or its parent shows the same.
 fn draw(nodes: &[Node], places: &[Place]) -> Vec<Map<String, Value>> {
-    let names = orchestrators(nodes, places);
+    let names = root_names(nodes, places);
     nodes
         .iter()
         .zip(places)
@@ -243,6 +253,7 @@ pub fn sync() -> herdr::Result<()> {
                 repo_key,
                 account: text(a, "display_agent").or_else(|| text(a, "agent")),
                 sub: a["tokens"]["pacer_sub"].is_string(),
+                named: text(a, "name").is_some() || a["tokens"]["pacer_task"].is_string(),
                 hidden: 0,
             }
         })
@@ -532,7 +543,7 @@ mod tests {
 
     fn node(pane: &str, label: &str, parent: Option<&str>) -> Node {
         let (repo, repo_key, account) = (Some("gh-dash".into()), Some("/gh-dash/.git".into()), Some("claude".into()));
-        Node { pane: pane.into(), label: label.into(), parent: parent.map(String::from), repo, repo_key, account, sub: false, hidden: 0 }
+        Node { pane: pane.into(), label: label.into(), parent: parent.map(String::from), repo, repo_key, account, sub: false, named: true, hidden: 0 }
     }
 
     fn in_repo(mut n: Node, repo: &str) -> Node {
@@ -619,8 +630,8 @@ mod tests {
         let solo = [node("c", "claude", None), node("s", "a", Some("c"))];
         let mut solo = solo;
         solo[1].sub = true;
-        assert_eq!(orchestrators(&solo, &layout(&solo))[0], None);
-        assert_eq!(orchestrators(&nodes, &layout(&nodes))[0].as_deref(), Some("gh-dash orch"));
+        assert_eq!(root_names(&solo, &layout(&solo))[0], None);
+        assert_eq!(root_names(&nodes, &layout(&nodes))[0].as_deref(), Some("gh-dash orch"));
     }
 
     #[test]
@@ -644,6 +655,32 @@ mod tests {
         note(&mut subs, "early", None, 2000);
         note(&mut subs, "later", Some("Plan"), 2000 + STOP_TTL);
         assert_eq!(subs.keys().collect::<Vec<_>>(), ["later"], "an unmatched stop is not kept for long");
+    }
+
+    #[test]
+    fn a_session_nobody_named_goes_by_its_repo_numbered_beside_others() {
+        let mut nodes = [
+            node("a", "claude", None),
+            node("b", "codex", None),
+            in_repo(node("c", "claude", None), "VeA"),
+            node("d", "ui-fix", None),
+            node("w", "claude", Some("d")),
+        ];
+        for i in [0, 1, 2, 4] {
+            nodes[i].named = false;
+        }
+        nodes[1].account = Some("codex".into());
+        assert_eq!(
+            drawn(&nodes),
+            [
+                "○ gh-dash 1 · ᶜˡᵃᵘᵈᵉ",
+                "○ gh-dash 2 · ᶜᵒᵈᵉˣ",
+                "○ gh-dash orch · ᶜˡᵃᵘᵈᵉ",
+                "⠀ └ · ○ claude · ᶜˡᵃᵘᵈᵉ",
+                "○ VeA · ᶜˡᵃᵘᵈᵉ",
+            ],
+            "alone in its repo, no number; a named one and a worker keep their names"
+        );
     }
 
     #[test]

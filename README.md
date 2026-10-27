@@ -145,8 +145,11 @@ The Agents list (its header reads `tree`) then gives each agent one line,
 each worker under the agent that started it: its branch, Herdr's own status
 circle, its name, its repo, and its account in superscript. A repo's agents
 sit together, its worktrees included. An orchestrator goes by its repo
-(`gh-dash orch`, numbered when one repo runs several), and a worker leaves
-out the repo its parent already shows. With the usage on one line, the tree
+(`gh-dash orch`, numbered when one repo runs several), and so does a
+session nobody named, which Herdr would call by its harness alone
+(`herdr-pacer`, or `herdr-pacer 1` and `herdr-pacer 2` beside another); the
+harness still shows in superscript. A worker leaves out the repo its parent
+already shows. With the usage on one line, the tree
 runs on through it, the labels in superscript so it fits:
 
 ```
