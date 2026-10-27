@@ -5,17 +5,19 @@
 //!
 //! and the Agents view, sorted so each child sits under its parent and each
 //! repo's agents (its worktrees too) sit together, gives each agent one line:
-//! the tree, its status circle and name, its repo and, in superscript, its
-//! account. An orchestrator goes by its repo, numbered when the repo has
-//! more than one; a worker leaves out the repo its parent shows:
+//! its branch, Herdr's own status circle, its name, its repo and, in
+//! superscript, its account. An orchestrator goes by its repo, numbered when
+//! the repo has more than one; a worker leaves out the repo its parent shows:
 //!
 //!   ● gh-dash orch 1 · ᶜˡᵃᵘᵈᵉ⁻³
-//!   ├─ ○ ui · ᶜˡᵃᵘᵈᵉ
-//!   │  └─ ● ui-table · ᶜᵒᵈᵉˣ
-//!   └─ ○ docs · herdr-pacer ᶜˡᵃᵘᵈᵉ
-//!   ● gh-dash orch 2 · ᶜˡᵃᵘᵈᵉ
-//!   └─ ○ api · ᶜˡᵃᵘᵈᵉ
+//!     ├ · ○ ui · ᶜˡᵃᵘᵈᵉ
+//!     │   └ · ● ui-table · ᶜᵒᵈᵉˣ
+//!     └ · ○ docs · herdr-pacer ᶜˡᵃᵘᵈᵉ
 //!   ○ claude · gh-dash ᶜˡᵃᵘᵈᵉ
+//!
+//! Herdr puts " · " between two tokens and only a space after its circle, so
+//! the branch meets the circle across a dot in the tree's own gray; that way
+//! the circle is Herdr's, in the theme's status colors, and the name is not.
 //!
 //! An agent no one started is a root; a link to a pane that holds no agent
 //! counts as none, and a loop is cut at one of its agents. The sort lives in
@@ -25,23 +27,10 @@ use crate::herdr::{self, call};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 
-/// Each status's circle and color: Herdr's dots, so the circle can sit
-/// beside the name rather than in Herdr's own column at the far left. A
-/// token has one color, so the line takes it; only the states that want
-/// attention have one, so a list of idle agents stays plain to read.
-pub const STATES: [(&str, &str, Option<&str>); 5] = [
-    ("idle", "○", None),
-    ("working", "●", Some("#e6c800")),
-    ("blocked", "●", Some("#ff5555")),
-    ("done", "●", Some("#4a9eff")),
-    ("unknown", "○", None),
-];
-
 struct Node {
     pane: String,
     label: String,
     parent: Option<String>,
-    status: String,
     /// the git repo it runs in, the main one for a worktree, and what tells
     /// two repos of the same name apart
     repo: Option<String>,
@@ -49,9 +38,9 @@ struct Node {
     account: Option<String>,
 }
 
-/// An agent's place: the parent it is drawn under, what leads its line (the
-/// rails and its branch), what leads the usage line below it (`rail`, the
-/// rails running on), and its sort key.
+/// An agent's place: the parent it is drawn under, what leads its circle (the
+/// rails and its branch, none for a root), what leads the usage line below
+/// it (`rail`, the rails running on), and its sort key.
 #[derive(Clone, Debug, Default, PartialEq)]
 struct Place {
     up: Option<usize>,
@@ -88,10 +77,12 @@ fn layout(nodes: &[Node]) -> Vec<Place> {
             if std::mem::replace(&mut seen[n], true) {
                 continue;
             }
+            // a child's branch sits under its parent's circle: " · " and the
+            // circle make four cells, so each level steps in four
             let (branch, cont) = match last {
                 None => ("", String::new()),
-                Some(true) => ("└─ ", format!("{prefix}   ")),
-                Some(false) => ("├─ ", format!("{prefix}│  ")),
+                Some(true) => ("└", format!("{prefix}    ")),
+                Some(false) => ("├", format!("{prefix}│   ")),
             };
             let kids: Vec<usize> = children[n].iter().copied().filter(|&c| !seen[c]).collect();
             for (k, &c) in kids.iter().enumerate().rev() {
@@ -153,16 +144,15 @@ fn draw(nodes: &[Node], places: &[Place]) -> Vec<Map<String, Value>> {
         .collect()
 }
 
-/// The tokens that draw one agent: its line in its status color, its repo
-/// and account, and its sort key.
+/// The tokens that draw one agent: its branch, its name, its repo and
+/// account, the rails of its usage line, and its sort key.
 fn tokens(p: &Place, n: &Node, name: &str, repo: Option<&str>) -> Map<String, Value> {
-    let status = STATES.iter().find(|s| s.0 == n.status).map_or("unknown", |s| s.0);
     let mut map = Map::new();
-    for (state, circle, _) in STATES {
-        // Herdr starts a row that has no state_icon two cells further left
-        let line = (state == status).then(|| lead(format!("  {}{circle} {name}", p.head)));
-        map.insert(format!("pacer_tree_{state}"), line.map_or(Value::Null, Value::from));
-    }
+    // a branch lines up under the name of a root, whose circle Herdr draws
+    // two cells left of where a row's later lines start
+    let branch = (!p.head.is_empty()).then(|| lead(format!("  {}", p.head)));
+    map.insert("pacer_branch".into(), branch.map_or(Value::Null, Value::from));
+    map.insert("pacer_name".into(), name.into());
     let with: Vec<String> = repo.map(String::from).into_iter().chain(n.account.as_deref().map(tiny)).collect();
     map.insert("pacer_repo".into(), if with.is_empty() { Value::Null } else { with.join(" ").into() });
     // Herdr trims a token's spaces at both ends; braille blanks it keeps
@@ -205,7 +195,6 @@ pub fn sync() -> herdr::Result<()> {
                 pane: text(a, "pane_id").unwrap_or_default(),
                 label: text(a, "name").or_else(|| text(a, "agent")).unwrap_or_else(|| "agent".into()),
                 parent: text(&a["tokens"], "pacer_parent"),
-                status: text(a, "agent_status").unwrap_or_default(),
                 repo,
                 repo_key,
                 account: text(a, "display_agent").or_else(|| text(a, "agent")),
@@ -260,7 +249,7 @@ mod tests {
 
     fn node(pane: &str, label: &str, parent: Option<&str>) -> Node {
         let (repo, repo_key, account) = (Some("gh-dash".into()), Some("/gh-dash/.git".into()), Some("claude".into()));
-        Node { pane: pane.into(), label: label.into(), parent: parent.map(String::from), status: "idle".into(), repo, repo_key, account }
+        Node { pane: pane.into(), label: label.into(), parent: parent.map(String::from), repo, repo_key, account }
     }
 
     fn in_repo(mut n: Node, repo: &str) -> Node {
@@ -268,14 +257,16 @@ mod tests {
         n
     }
 
-    /// Every agent's line, in sort order, as the sidebar draws it.
+    /// Every agent's line, in sort order, as Herdr draws it: " · " between
+    /// tokens, a space after its circle (○ here).
     fn drawn(nodes: &[Node]) -> Vec<String> {
         let places = layout(nodes);
         let mut lines: Vec<(String, String)> = draw(nodes, &places)
             .iter()
             .map(|m| {
-                let line = STATES.iter().find_map(|s| m[&format!("pacer_tree_{}", s.0)].as_str()).unwrap();
-                (m["pacer_tree_key"].as_str().unwrap().into(), format!("{line} · {}", m["pacer_repo"].as_str().unwrap_or_default()))
+                let branch = m["pacer_branch"].as_str().map(|b| format!("{b} · ")).unwrap_or_default();
+                let repo = m["pacer_repo"].as_str().map(|r| format!(" · {r}")).unwrap_or_default();
+                (m["pacer_tree_key"].as_str().unwrap().into(), format!("{branch}○ {}{repo}", m["pacer_name"].as_str().unwrap()))
             })
             .collect();
         lines.sort();
@@ -296,15 +287,16 @@ mod tests {
         assert_eq!(
             drawn(&nodes),
             [
-                "⠀ ○ gh-dash orch · ᶜˡᵃᵘᵈᵉ⁻³",
-                "⠀ ├─ ○ ui · ᶜˡᵃᵘᵈᵉ",
-                "⠀ │  └─ ○ ui-table · ᶜᵒᵈᵉˣ",
-                "⠀ └─ ○ docs · herdr-pacer ᶜˡᵃᵘᵈᵉ",
-                "⠀ ○ lone · herdr-pacer ᶜˡᵃᵘᵈᵉ",
+                "○ gh-dash orch · ᶜˡᵃᵘᵈᵉ⁻³",
+                "⠀ ├ · ○ ui · ᶜˡᵃᵘᵈᵉ",
+                "⠀ │   └ · ○ ui-table · ᶜᵒᵈᵉˣ",
+                "⠀ └ · ○ docs · herdr-pacer ᶜˡᵃᵘᵈᵉ",
+                "○ lone · herdr-pacer ᶜˡᵃᵘᵈᵉ",
             ]
-        );        // the usage line under each runs the rails on, its text under the name
+        );
+        // the usage line under each runs the rails on, its text under the name
         let rails: Vec<String> = layout(&nodes).into_iter().map(|p| p.rail).collect();
-        assert_eq!(rails, ["│ ", "│       ", "│  │ ", "  ", "     "]);
+        assert_eq!(rails, ["│ ", "│         ", "│   │ ", "  ", "      "]);
     }
 
     #[test]
@@ -320,27 +312,23 @@ mod tests {
         assert_eq!(
             drawn(&nodes),
             [
-                "⠀ ○ gh-dash orch 1 · ᶜˡᵃᵘᵈᵉ",
-                "⠀ └─ ○ worker-a · ᶜˡᵃᵘᵈᵉ",
-                "⠀ ○ lone · gh-dash ᶜˡᵃᵘᵈᵉ",
-                "⠀ ○ gh-dash orch 2 · ᶜˡᵃᵘᵈᵉ",
-                "⠀ └─ ○ worker-b · ᶜˡᵃᵘᵈᵉ",
-                "⠀ ○ other · herdr-pacer ᶜˡᵃᵘᵈᵉ",
+                "○ gh-dash orch 1 · ᶜˡᵃᵘᵈᵉ",
+                "⠀ └ · ○ worker-a · ᶜˡᵃᵘᵈᵉ",
+                "○ lone · gh-dash ᶜˡᵃᵘᵈᵉ",
+                "○ gh-dash orch 2 · ᶜˡᵃᵘᵈᵉ",
+                "⠀ └ · ○ worker-b · ᶜˡᵃᵘᵈᵉ",
+                "○ other · herdr-pacer ᶜˡᵃᵘᵈᵉ",
             ]
         );
     }
 
     #[test]
-    fn the_line_takes_its_status_and_clears_the_others() {
+    fn a_root_has_no_branch_and_nothing_said_has_no_token() {
         let mut n = node("p1", "orch", None);
-        n.status = "blocked".into();
-        let m = tokens(&layout(std::slice::from_ref(&n))[0], &n, "orch", None);
-        assert_eq!(m["pacer_tree_blocked"], "⠀ ● orch");
-        assert!(m["pacer_tree_idle"].is_null());
-        n.status = "something-new".into();
-        assert_eq!(tokens(&Place::default(), &n, "orch", None)["pacer_tree_unknown"], "⠀ ○ orch");
         n.account = None;
-        assert!(tokens(&Place::default(), &n, "orch", None)["pacer_repo"].is_null(), "no repo or account, no token");
+        let m = tokens(&layout(std::slice::from_ref(&n))[0], &n, "orch", None);
+        assert!(m["pacer_branch"].is_null() && m["pacer_repo"].is_null());
+        assert_eq!(m["pacer_name"], "orch");
     }
 
     #[test]
@@ -348,7 +336,7 @@ mod tests {
         let nodes = [node("p1", "a", Some("p2")), node("p2", "b", Some("p1")), node("p3", "c", Some("gone")), node("p4", "d", Some("p4"))];
         let out = layout(&nodes);
         assert_eq!((out[0].head.as_str(), out[0].key.as_str()), ("", "0000.0000"), "the loop is cut at its first agent");
-        assert_eq!((out[1].head.as_str(), out[1].key.as_str()), ("└─ ", "0000.0000.0001"));
+        assert_eq!((out[1].head.as_str(), out[1].key.as_str()), ("└", "0000.0000.0001"));
         assert_eq!(out[2].head, "");
         assert_eq!(out[3].head, "");
     }
@@ -358,6 +346,6 @@ mod tests {
         // child → a, a ⇄ b, with the child listed first: it stays a's child
         let nodes = [node("c", "child", Some("a")), node("a", "a", Some("b")), node("b", "b", Some("a"))];
         let out = layout(&nodes);
-        assert!(out[0].key.starts_with(&out[1].key) && out[0].head.ends_with("└─ "), "{out:?}");
+        assert!(out[0].key.starts_with(&out[1].key) && out[0].head.ends_with('└'), "{out:?}");
     }
 }

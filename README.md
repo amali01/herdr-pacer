@@ -138,31 +138,34 @@ herdr pane report-metadata <pane> --source orchestrator --token pacer_parent=$HE
 ```
 
 The Agents list (its header reads `tree`) then gives each agent one line,
-each worker under the agent that started it: its status circle and name, its
-repo, and its account in superscript. A repo's agents sit together, its
-worktrees included. An orchestrator goes by its repo (`gh-dash orch`,
-numbered when one repo runs several), and a worker leaves out the repo its
-parent already shows. With the usage on one line, the tree runs on through
-it, the labels in superscript so it fits:
+each worker under the agent that started it: its branch, Herdr's own status
+circle, its name, its repo, and its account in superscript. A repo's agents
+sit together, its worktrees included. An orchestrator goes by its repo
+(`gh-dash orch`, numbered when one repo runs several), and a worker leaves
+out the repo its parent already shows. With the usage on one line, the tree
+runs on through it, the labels in superscript so it fits:
 
 ```
-● gh-dash orch 1 · ᶜˡᵃᵘᵈᵉ⁻³
-│ ᶜᵗˣ24 ⁵ʰ36 ʷᵏ15
-├─ ○ api · ᶜˡᵃᵘᵈᵉ
-│    ᶜᵗˣ21 ⁵ʰ36 ʷᵏ15
-└─ ● docs · herdr-pacer ᶜᵒᵈᵉˣ
-     ᶜᵗˣ29 ʷᵏ98
+○ gh-dash orch · ᶜˡᵃᵘᵈᵉ⁻³
+  │ ᶜᵗˣ24 ⁵ʰ36 ʷᵏ15
+  ├ · ● orch-u2 · ᶜˡᵃᵘᵈᵉ⁻³
+  │     ᶜᵗˣ21 ⁵ʰ36 ʷᵏ15
+  └ · ● docs · herdr-pacer ᶜᵒᵈᵉˣ
+        ᶜᵗˣ29 ʷᵏ98
 ○ claude · gh-dash ᶜˡᵃᵘᵈᵉ
   ᶜᵗˣ28 ⁵ʰ36 ʷᵏ15
 ```
 
-On stock Herdr a token has one color, so that usage line is plain while
-every window is fine and takes its fullest window's color when one gets high.
-With each metric on its own row, the bars keep their colors and the tree's
-lines pause beside them.
+The colors are Herdr's: the circle is the one it draws, in your theme's
+status colors, and the name takes the color Herdr gives agent names.
+Stock Herdr puts ` · ` between any two tokens except after its circle, so
+a branch meets the circle across a dot in the tree's own gray. A token has
+one color, so the usage line is gray while every window is fine and takes
+the theme's peach, yellow or red as its fullest window gets high. With each
+metric on its own row, the bars keep their colors and the tree's lines pause
+beside them.
 
-A line that wants attention takes its status color: yellow working, red
-blocked, blue done; idle agents stay plain. An agent nobody started is a row of its own, as is a
+An agent nobody started is a row of its own, as is a
 worker whose parent has closed. The tree sort stays out of the way when
 `[ui] agent_panel_sort` is `"priority"`. Known limit: restarting the Herdr
 server forgets who started whom; agents started after that line up again.
@@ -340,6 +343,7 @@ anyone can list. The OpenCode database is opened read-only.
 | `src/panel.rs` | The settings popup (`herdr-pacer settings`) |
 | `src/tabbar.rs` | The tab bar segments (`herdr-pacer tabbar <agent>`) |
 | `src/tree.rs` | The agent tree: each agent's tree line and the Agents sort (`herdr-pacer tree sync` / `view`) |
+| `src/theme.rs` | The colors of Herdr's built-in themes the sidebar text takes |
 | `src/setup.rs` | One-command setup |
 | `src/upgrade.rs` | `update` (installs only a newer version) and the once-per-version migration |
 | `claude-statusline.sh` | A shim for statusLines wrapped by the shell-script versions |

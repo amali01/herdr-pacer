@@ -111,7 +111,7 @@ fn patch(doc: &mut DocumentMut) -> Vec<String> {
 /// Sets `[ui.sidebar.agents] rows` for the saved layout: added, updated or
 /// unchanged.
 fn put_rows(doc: &mut DocumentMut) -> &'static str {
-    let snippet: DocumentMut = context::rows_toml(&settings::load(), herdr::glue()).parse().expect("generated rows are TOML");
+    let snippet: DocumentMut = context::rows_toml(&settings::load(), herdr::glue(), &crate::theme::current()).parse().expect("generated rows are TOML");
     let rows = snippet["ui"]["sidebar"]["agents"]["rows"].clone();
     let agents = table(doc, &["ui", "sidebar", "agents"]);
     match agents.get("rows") {
@@ -290,7 +290,7 @@ command = "lazygit"
         assert!(once.starts_with("# mine"));
         assert!(!once.contains("sidebar_width") && !once.contains("dock-collapse") && !once.contains("ctrl+u"));
         assert!(once.contains(r#"key = ["prefix+u", "prefix+shift+u"]"#) && once.contains(TOGGLE));
-        assert!(once.contains("lazygit") && once.contains("$pacer_tree_idle"), "rows that every layout has");
+        assert!(once.contains("lazygit") && once.contains("$pacer_name"), "rows that every layout has");
         let mut again: DocumentMut = once.parse().unwrap();
         let notes = patch(&mut again);
         assert_eq!(again.to_string(), once);

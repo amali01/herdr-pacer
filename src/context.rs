@@ -110,18 +110,19 @@ fn line_tokens(rail: &str, pcts: [Option<u32>; 3]) -> Map<String, Value> {
 
 /// `[ui.sidebar.agents] rows` for the chosen layout. Rows of metrics that are
 /// switched off stay: Herdr hides a row whose tokens are all unreported.
-pub fn rows_toml(s: &Settings, glue: bool) -> String {
-    // the agent tree: its line in the status color, then its repo and account
-    let line = crate::tree::STATES.map(|(state, _, fg)| {
-        let fg = fg.map(|c| format!("fg = \"{c}\", ")).unwrap_or_default();
-        format!("{{ token = \"$pacer_tree_{state}\", {fg}bold = true }}")
-    });
-    let mut rows = vec![format!("[{}, {{ token = \"$pacer_repo\", dim = true }}]", line.join(", "))];
+pub fn rows_toml(s: &Settings, glue: bool, palette: &crate::theme::Palette) -> String {
+    // the agent tree: its branch, Herdr's own circle, the name as Herdr draws
+    // one, then its repo and account in Herdr's gray
+    let fg = |c: &Option<String>| c.as_ref().map(|c| format!(", fg = \"{c}\"")).unwrap_or_default();
+    let mut rows = vec![format!(
+        "[\"$pacer_branch\", \"state_icon\", {{ token = \"$pacer_name\"{}, bold = true }}, \"$pacer_repo\"]",
+        fg(&palette.subtext0)
+    )];
     let groups: Vec<String> = METRICS.iter().enumerate().map(|(i, m)| group(m.1, s.one_line && i > 0, glue)).collect();
     match (s.one_line, glue) {
         (true, false) => rows.push(format!(
-            "[{}]",
-            BUCKETS.map(|(b, fg)| format!("{{ token = \"$pacer_use_{b}\"{} }}", if b == "ok" { String::new() } else { format!(", fg = \"{fg}\"") })).join(", ")
+            "[\"$pacer_use_ok\", {}]",
+            [("warn", &palette.peach), ("hot", &palette.yellow), ("crit", &palette.red)].map(|(b, c)| format!("{{ token = \"$pacer_use_{b}\"{} }}", fg(c))).join(", ")
         )),
         (true, true) => rows.push(format!("[{}]", groups.iter().map(|g| &g[1..g.len() - 1]).collect::<Vec<_>>().join(", "))),
         (false, _) => rows.extend(groups),
@@ -603,7 +604,7 @@ mod tests {
     #[test]
     fn rows_fit_herdr_limits_in_either_layout() {
         for (one_line, glue) in [(false, true), (true, true), (false, false), (true, false)] {
-            let text = rows_toml(&Settings { one_line, ..Settings::default() }, glue);
+            let text = rows_toml(&Settings { one_line, ..Settings::default() }, glue, &crate::theme::Palette::default());
             assert_eq!(text.contains("glue"), glue, "stock Herdr rejects the whole file over glue");
             let doc: toml_edit::DocumentMut = text.parse().expect("valid TOML");
             let rows = doc["ui"]["sidebar"]["agents"]["rows"].as_array().unwrap();

@@ -10,6 +10,7 @@ mod panel;
 mod settings;
 mod setup;
 mod tabbar;
+mod theme;
 mod tree;
 mod tui;
 mod upgrade;

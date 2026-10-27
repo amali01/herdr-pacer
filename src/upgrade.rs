@@ -24,7 +24,10 @@ fn stamp() -> PathBuf {
 
 /// What `stamp()` holds once this build has migrated under this Herdr.
 pub fn stamp_now() -> String {
-    format!("{VERSION}{}", if herdr::glue() { "+glue" } else { "" })
+    // the theme too: the rows carry its colors, so a new one rewrites them
+    let p = crate::theme::current();
+    let theme = [p.subtext0, p.peach, p.yellow, p.red].map(Option::unwrap_or_default).join(",");
+    format!("{VERSION}{} {theme}", if herdr::glue() { "+glue" } else { "" })
 }
 
 /// Files older builds kept that nothing reads any more.
