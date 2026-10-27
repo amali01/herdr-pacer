@@ -38,6 +38,12 @@ pub fn call(method: &str, params: Value) -> Result<Value> {
     Ok(reply["result"].take())
 }
 
+/// Whether Herdr says a pane or agent is not there. A call that fails some
+/// other way (the server restarting, say) is no answer.
+pub fn gone(method: &str, params: Value) -> bool {
+    matches!(call(method, params), Err(Error(e)) if e.contains("not found"))
+}
+
 /// The pane's tokens, set or cleared (`None`), under our metadata source.
 pub fn report_tokens(pane_id: &str, tokens: Value, ttl_ms: Option<u64>) -> Result<()> {
     report_metadata(pane_id, json!({ "tokens": tokens }), ttl_ms)

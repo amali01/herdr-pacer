@@ -2,7 +2,8 @@
 //! (`herdr-pacer subview`). It follows the log Claude keeps of the subagent,
 //! printing its task, its tool calls and what it says; lists the pane as an
 //! agent, named in the tree after the task once Claude writes it down; keeps
-//! its context bar; and ends when the subagent finishes or its parent goes.
+//! its context bar; and ends when the subagent finishes or the Claude that
+//! runs it is gone.
 
 use crate::herdr::call;
 use serde_json::{json, Value};
@@ -12,7 +13,7 @@ use std::time::Duration;
 pub fn run() -> Result<(), String> {
     let var = |k: &str| std::env::var(k).map_err(|_| format!("{k} is not set: a subagent's pane sets it"));
     let (log, meta, parent, me) = (var("PACER_SUBAGENT_LOG")?, var("PACER_SUBAGENT_META")?, var("PACER_SUBAGENT_PARENT")?, var("HERDR_PANE_ID")?);
-    let (mut read, mut named, mut shown, mut tasked, mut placed) = (0u64, None::<String>, None, false, parent.clone());
+    let (mut read, mut named, mut shown, mut tasked, mut placed) = (0u64, None::<String>, None, false, String::new());
     // an agent in Herdr's list
     call("pane.report_agent", json!({ "pane_id": me, "source": "herdr-pacer", "agent": "claude", "state": "working" })).map_err(|e| e.to_string())?;
     loop {
@@ -29,7 +30,7 @@ pub fn run() -> Result<(), String> {
         // a subagent started by another sits under that one's view while it
         // is open, under the agent running them all otherwise
         let up = summary["parentAgentId"].as_str().and_then(|id| crate::tree::view_of(&parent, id));
-        let up = up.filter(|v| call("pane.get", json!({ "pane_id": v })).is_ok()).unwrap_or_else(|| parent.clone());
+        let up = up.filter(|v| !crate::herdr::gone("pane.get", json!({ "pane_id": v }))).unwrap_or_else(|| parent.clone());
         if up != placed && crate::herdr::report_tokens(&me, json!({ "pacer_parent": up }), None).is_ok() {
             placed = up;
             let _ = crate::tree::sync();
@@ -55,7 +56,9 @@ pub fn run() -> Result<(), String> {
                 line.clear();
             }
         }
-        if summary["finished"] == true || call("pane.get", json!({ "pane_id": parent })).is_err() {
+        // done, or its Claude gone without a stop (killed, crashed) while
+        // its pane may stay open
+        if summary["finished"] == true || crate::herdr::gone("agent.get", json!({ "target": parent })) {
             return Ok(());
         }
         std::thread::sleep(Duration::from_secs(1));

@@ -202,7 +202,7 @@ pub fn resize_all() -> Result<()> {
 /// Adds a dock when the tab has none along its bottom. One already there is
 /// left alone, so a size dragged by hand stays and nothing redraws.
 fn ensure(tab: &str) -> Result<()> {
-    if crate::tree::is_subagents_tab(tab) || call("tab.get", json!({ "tab_id": tab })).is_ok_and(|t| t["tab"]["label"] == "subagents") {
+    if crate::tree::is_subagents_tab(tab) {
         return Ok(()); // a stack of subagents' views, no work to pace there
     }
     let Ok(layout) = tree(tab) else {

@@ -295,7 +295,7 @@ pub fn subagent(event: &str) -> Result<(), String> {
     let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut payload);
     let hook: Value = serde_json::from_str(&payload).unwrap_or_default();
     let Some(id) = hook["agent_id"].as_str().filter(|i| !i.is_empty()) else { return Ok(()) };
-    let closing = {
+    {
         // parallel subagents start together: one at a time, so they share
         // one subagents tab and one file
         let lock = std::fs::File::create(crate::usage::state_dir().join("subagents.lock")).ok();
@@ -303,7 +303,9 @@ pub fn subagent(event: &str) -> Result<(), String> {
         let mut subs = subs_of(&pane);
         let had = subs.get(id).and_then(|v| v["view"].as_str()).map(String::from);
         note(&mut subs, id, if start { hook["agent_type"].as_str() } else { None }, crate::usage::now());
-        if let Some(entry) = subs.get_mut(id).filter(|e| start && e.get("type").is_some() && e.get("view").is_none()) {
+        // a resumed one whose view was closed meanwhile gets a new one
+        let open = |e: &Value| e["view"].as_str().is_none_or(|v| herdr::gone("pane.get", json!({ "pane_id": v })));
+        if let Some(entry) = subs.get_mut(id).filter(|e| start && e.get("type").is_some() && open(e)) {
             if let Some(view) = open_view(&pane, id, &hook) {
                 entry["view"] = json!(view);
             }
@@ -313,11 +315,12 @@ pub fn subagent(event: &str) -> Result<(), String> {
             true => std::fs::remove_file(subs_file(&pane)),
             false => crate::usage::write_atomic(&subs_file(&pane), Value::Object(subs).to_string().as_bytes()),
         };
-        had.filter(|_| !start)
+        // still under the lock: a start must not pick the pane, or the tab,
+        // this takes away
+        if let Some(view) = had.filter(|_| !start) {
+            let _ = call("pane.close", json!({ "pane_id": view }));
+        }
     };
-    if let Some(view) = closing {
-        let _ = call("pane.close", json!({ "pane_id": view }));
-    }
     sync().map_err(|e| e.to_string())
 }
 
@@ -341,9 +344,9 @@ pub fn is_subagents_tab(tab: &str) -> bool {
 }
 
 /// Opens a subagent's live view in its workspace's subagents tab, the tab
-/// made on its first, under its parent and on the parent's Claude account.
-/// The view lists itself as an agent and names itself. Its pane, or None
-/// when Herdr would not open one.
+/// made on its first, on its parent's Claude account. The view lists itself
+/// as an agent, names itself, and says whose it is. Its pane, or None when
+/// Herdr would not open one.
 fn open_view(parent: &str, id: &str, hook: &Value) -> Option<String> {
     let ws = call("pane.get", json!({ "pane_id": parent })).ok()?["pane"]["workspace_id"].as_str()?.to_string();
     // Claude keeps a subagent's log and summary beside its session's transcript
@@ -373,7 +376,6 @@ fn open_view(parent: &str, id: &str, hook: &Value) -> Option<String> {
         }
     };
     let view = opened["plugin_pane"]["pane"]["pane_id"].as_str()?.to_string();
-    let _ = herdr::report_tokens(&view, json!({ "pacer_parent": parent }), None);
     crate::context::share_account(parent, &view);
     Some(view)
 }
