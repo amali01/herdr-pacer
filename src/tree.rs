@@ -26,13 +26,15 @@ use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 
 /// Each status's circle and color: Herdr's dots, so the circle can sit
-/// beside the name rather than in Herdr's own column at the far left.
-pub const STATES: [(&str, &str, &str); 5] = [
-    ("idle", "○", "#00af50"),
-    ("working", "●", "#e6c800"),
-    ("blocked", "●", "#ff5555"),
-    ("done", "●", "#4a9eff"),
-    ("unknown", "○", "#8a8494"),
+/// beside the name rather than in Herdr's own column at the far left. A
+/// token has one color, so the line takes it; only the states that want
+/// attention have one, so a list of idle agents stays plain to read.
+pub const STATES: [(&str, &str, Option<&str>); 5] = [
+    ("idle", "○", None),
+    ("working", "●", Some("#e6c800")),
+    ("blocked", "●", Some("#ff5555")),
+    ("done", "●", Some("#4a9eff")),
+    ("unknown", "○", None),
 ];
 
 struct Node {

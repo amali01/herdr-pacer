@@ -154,8 +154,8 @@ parent already shows. The usage bars follow on their own line:
 ○ claude · gh-dash ᶜˡᵃᵘᵈᵉ
 ```
 
-A line takes its agent's status color: green idle, yellow working, red
-blocked, blue done. An agent nobody started is a row of its own, as is a
+A line that wants attention takes its status color: yellow working, red
+blocked, blue done; idle agents stay plain. An agent nobody started is a row of its own, as is a
 worker whose parent has closed. The tree sort stays out of the way when
 `[ui] agent_panel_sort` is `"priority"`. Known limit: restarting the Herdr
 server forgets who started whom; agents started after that line up again.

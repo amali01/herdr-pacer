@@ -101,7 +101,10 @@ fn group(prefix: &str, glued: bool, glue: bool) -> String {
 /// switched off stay: Herdr hides a row whose tokens are all unreported.
 pub fn rows_toml(s: &Settings, glue: bool) -> String {
     // the agent tree: its line in the status color, then its repo and account
-    let line = crate::tree::STATES.map(|(state, _, fg)| format!("{{ token = \"$pacer_tree_{state}\", fg = \"{fg}\", bold = true }}"));
+    let line = crate::tree::STATES.map(|(state, _, fg)| {
+        let fg = fg.map(|c| format!("fg = \"{c}\", ")).unwrap_or_default();
+        format!("{{ token = \"$pacer_tree_{state}\", {fg}bold = true }}")
+    });
     let mut rows = vec![format!("[{}, {{ token = \"$pacer_repo\", dim = true }}]", line.join(", "))];
     let groups: Vec<String> = METRICS.iter().enumerate().map(|(i, m)| group(m.1, s.one_line && i > 0, glue)).collect();
     match s.one_line {
