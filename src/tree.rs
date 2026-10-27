@@ -257,10 +257,12 @@ pub fn sync() -> herdr::Result<()> {
     }
     let (nodes, agents): (Vec<Node>, Vec<&Value>) = listed.into_iter().unzip();
     let mut places = layout(&nodes);
-    if priority() {
-        // Herdr orders by attention, not by the tree: no branches to mislead,
-        // and no tree sort left over from before the setting changed
+    // the view follows the order setting both ways, and the subagents toggle
+    if std::fs::read_to_string(view_file()).ok().as_deref() != Some(&view_mode()) {
         let _ = view();
+    }
+    if priority() {
+        // Herdr orders by attention, not by the tree: no branches to mislead
         places.iter_mut().for_each(|p| *p = Place { key: std::mem::take(&mut p.key), ..Place::default() });
     }
     let mut failed = None;
@@ -336,8 +338,8 @@ pub fn subagent(event: &str) -> Result<(), String> {
     let hook: Value = serde_json::from_str(&payload).unwrap_or_default();
     let Some(id) = hook["agent_id"].as_str().filter(|i| !i.is_empty()) else { return Ok(()) };
     // off until asked for in the settings: it opens a tab; a stop still
-    // closes a view opened while it was on
-    if start && !crate::settings::load().subagent_panes {
+    // closes a view opened while it was on, and costs nothing otherwise
+    if !crate::settings::load().subagent_panes && (start || !subs_of(&pane).contains_key(id)) {
         return Ok(());
     }
     {
@@ -486,10 +488,27 @@ pub fn toggle_subagents() -> herdr::Result<()> {
     sync()
 }
 
+/// The view as last set: which order, and whether subagents are out.
+fn view_file() -> std::path::PathBuf {
+    crate::usage::state_dir().join("view")
+}
+
+fn view_mode() -> String {
+    format!("{} {}", if priority() { "priority" } else { "tree" }, if subagents_hidden() { "hidden" } else { "shown" })
+}
+
 /// Sorts the Agents view by the tree, or hands the order back to Herdr when
 /// the user picked the attention queue (`agent_panel_sort = "priority"`);
 /// either way leaves Claude's subagents out while they are hidden.
 pub fn view() -> herdr::Result<()> {
+    let set = view_set();
+    if set.is_ok() {
+        let _ = std::fs::write(view_file(), view_mode());
+    }
+    set
+}
+
+fn view_set() -> herdr::Result<()> {
     let source = "plugin:herdr-pacer";
     let filter = subagents_hidden().then(|| json!({ "op": "not", "filter": { "op": "exists", "field": { "token": "pacer_sub" } } }));
     if priority() {

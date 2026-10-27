@@ -171,10 +171,10 @@ fine and takes the theme's peach, yellow or red as its fullest window gets
 high.
 
 Claude Code's own subagents run inside its process, so Herdr never lists
-them. Turn on **Subagents: own panes** in the settings popup (it is off
-until you do, since it opens a tab), and `claude-hook install` (which
-`setup` runs) adds Claude's SubagentStart and SubagentStop hooks, async,
-beside any of yours. Each subagent then gets a pane of its own in its workspace's `subagents` tab: a
+them. `claude-hook install` (which `setup` runs) adds Claude's
+SubagentStart and SubagentStop hooks, async, beside any of yours; they do
+nothing until you turn on **Subagents: own panes** in the settings popup,
+off by default since it opens a tab. Each subagent then gets a pane of its own in its workspace's `subagents` tab: a
 live view of its task, its tool calls and what it says. That pane is listed
 as an agent under the one that started it, named after its task, with its
 own circle and context bar on its parent's account, and a click takes you
@@ -279,7 +279,7 @@ once.
 
 herdr-pacer is one Rust binary, built by Herdr from source on install and on
 update, so it needs a Rust toolchain (1.89 or newer; [rustup](https://rustup.rs))
-and Herdr 0.9 or newer. `sqlite3` only if you want OpenCode's context bar.
+and Herdr 0.9.5 or newer. `sqlite3` only if you want OpenCode's context bar.
 Nothing else — herdr-pacer talks to Herdr over its socket and to each provider
 on its own.
 

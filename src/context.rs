@@ -407,6 +407,27 @@ fn wrapped_inner(command: &str) -> Option<String> {
 }
 
 /// A timestamped copy next to `path`, keeping only the newest three.
+/// Writes a Claude settings file read as `read`: a backup first, then the new
+/// text whole, swapped in, never half written. A link (one settings file
+/// shared by several config dirs) is followed, and stays a link. A file that
+/// changed since it was read is left alone: Claude or the user saved it
+/// meanwhile, and writing ours would lose that. The backup, if one was made.
+fn save_settings(path: &std::path::Path, read: &str, body: &str) -> Result<Option<PathBuf>, String> {
+    let real = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let now = std::fs::read_to_string(&real).unwrap_or_else(|_| "{}".into());
+    if now != read {
+        return Err(format!("{}: changed while herdr-pacer was editing it; nothing written, run `herdr-pacer claude-hook install` again", path.display()));
+    }
+    let saved = real.exists().then(|| backup(&real)).flatten();
+    let mode = std::fs::metadata(&real).map(|m| m.permissions());
+    usage::write_atomic(&real, body.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))?;
+    // a private file stays private
+    if let Ok(mode) = mode {
+        let _ = std::fs::set_permissions(&real, mode);
+    }
+    Ok(saved)
+}
+
 pub fn backup(path: &std::path::Path) -> Option<PathBuf> {
     let name = path.file_name()?.to_string_lossy().into_owned();
     let copy = path.with_file_name(format!("{name}.bak-{}", usage::now()));
@@ -469,7 +490,8 @@ fn put_subagent_hooks(settings: &mut Value, exe: Option<&str>) -> bool {
             !(hooks.is_empty() && had > 0)
         });
         if let Some(exe) = exe {
-            groups.push(json!({ "hooks": [{ "type": "command", "command": format!("{exe} subagent {arg}"), "async": true, "timeout": 10 }] }));
+            // a burst of subagents takes turns on one lock: room to wait
+            groups.push(json!({ "hooks": [{ "type": "command", "command": format!("{exe} subagent {arg}"), "async": true, "timeout": 60 }] }));
         }
         match (groups.is_empty(), settings["hooks"].as_object_mut()) {
             (true, Some(hooks)) => drop(hooks.remove(event)),
@@ -497,10 +519,8 @@ fn hook(path: &std::path::Path, action: &str) -> Result<String, String> {
     let exe = std::env::current_exe().and_then(|p| p.canonicalize()).map_err(|e| e.to_string())?;
     let ours = format!("{} statusline", quote(&exe.to_string_lossy()));
     let write = |settings: &Value| -> Result<Option<PathBuf>, String> {
-        let saved = path.exists().then(|| backup(path)).flatten();
         let body = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())? + "\n";
-        std::fs::write(path, body).map_err(|e| format!("{}: {e}", path.display()))?;
-        Ok(saved)
+        save_settings(path, &text, &body)
     };
     let show = |s: &str| if s.is_empty() { "<none>".to_string() } else { s.to_string() };
     match action {
@@ -685,6 +705,24 @@ mod tests {
         assert_eq!(stock["pacer_ctx_hot"], "⠀72% ⣤⣤⣤⣤⣤⣤⣤⣀⣀⣀");
         assert!(stock["pacer_ctx"].is_null());
         assert_eq!(tokens(2, Some(50), &two, false, "", 22)["pacer_wk_warn"], "wk 50% ⣶⣀");
+    }
+
+    #[test]
+    fn a_settings_file_is_swapped_whole_through_its_link_and_never_over_a_change() {
+        let dir = std::env::temp_dir().join(format!("herdr-pacer-claude-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("a")).unwrap();
+        std::fs::create_dir_all(dir.join("b")).unwrap();
+        let real = dir.join("a/settings.json");
+        std::fs::write(&real, "{}").unwrap();
+        let link = dir.join("b/settings.json");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        save_settings(&link, "{}", "{\"x\": 1}\n").unwrap();
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink(), "the link stays a link");
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "{\"x\": 1}\n");
+        assert!(save_settings(&link, "{}", "{}").is_err(), "a file changed since it was read is left alone");
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "{\"x\": 1}\n");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

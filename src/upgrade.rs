@@ -78,9 +78,10 @@ pub fn migrate(force: bool) {
         return; // another hook is on it
     }
     clean(&usage::state_dir(), &old_state_dir(), &settings::dir());
-    let _ = context::claude_hook("refresh");
+    // not retried on every hook (each would restart the docks): said once
+    let mut failed: Vec<String> = context::claude_hook("refresh").err().into_iter().collect();
     if setup::configured() {
-        let _ = setup::apply_config();
+        failed.extend(setup::apply_config().err());
         context::report_all(); // the bars' tokens are shaped for glue or not
         // the rows may lead with the tree now; draw it rather than wait for an event
         let _ = crate::tree::view();
@@ -88,6 +89,10 @@ pub fn migrate(force: bool) {
     }
     let _ = dock::restart();
     let _ = fs::write(stamp(), now);
+    if !failed.is_empty() {
+        let body = format!("{}\nRun `herdr-pacer setup` once it is fixed.", failed.join("\n"));
+        let _ = crate::herdr::call("notification.show", serde_json::json!({ "title": "herdr-pacer could not finish updating", "body": body }));
+    }
 }
 
 // ── update: install only a newer version ──
