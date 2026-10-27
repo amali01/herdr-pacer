@@ -207,8 +207,11 @@ pub fn report_usage(pane: &str, agent: &str, account: &str, s: &Settings, rows: 
     }
     if s.one_line && !glue {
         // reported after the context bar, whose number it reads back
-        let rail = call("pane.get", json!({ "pane_id": pane })).ok().and_then(|v| v["pane"]["tokens"]["pacer_rail"].as_str().map(|r| r.replace('⠀', " ")));
-        map.extend(line_tokens(&rail.unwrap_or_default(), [recalled(pane).filter(|_| s.metrics[0]), five, week]));
+        // a pane Herdr would not show keeps its line rather than lose its rails
+        if let Ok(v) = call("pane.get", json!({ "pane_id": pane })) {
+            let rail = v["pane"]["tokens"]["pacer_rail"].as_str().unwrap_or_default().replace('⠀', " ");
+            map.extend(line_tokens(&rail, [recalled(pane).filter(|_| s.metrics[0]), five, week]));
+        }
     }
     let mut params = json!({ "tokens": map });
     match account_label(agent, account, found.as_ref()) {
@@ -246,9 +249,13 @@ pub fn report_all() {
     }
 }
 
-/// Redraws one agent's bars from what was last reported.
+/// Redraws one agent's usage line on new tree rails: only the stock one-line
+/// layout leads with them.
 pub fn redraw(pane: &str, agent: &str) {
-    draw(pane, agent, &settings::load(), &usage::load());
+    let s = settings::load();
+    if s.one_line && !herdr::glue() {
+        draw(pane, agent, &s, &usage::load());
+    }
 }
 
 fn draw(pane: &str, agent: &str, s: &Settings, rows: &[usage::Row]) {
