@@ -143,5 +143,5 @@ id = "settings"
 title = "herdr-pacer settings"
 placement = "popup"
 width = 74
-height = 24
+height = 25
 command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-pacer\" settings"]

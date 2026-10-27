@@ -41,6 +41,7 @@ enum Setting {
     OneLine(bool),
     SidebarStyle(Style),
     SidebarSize(u8),
+    SubagentPanes,
     TabAgent(usize),
     TabWindow(usize),
     TabStyle(Option<Style>),
@@ -97,6 +98,7 @@ fn items(s: &Settings) -> Vec<Item> {
         plain("Layout", vec![(Setting::OneLine(false), "a row each"), (Setting::OneLine(true), "one line")]),
         Item { label: "Style", kind: Kind::Styles, options: style_options(Setting::SidebarStyle) },
         size_item(Some(s.sidebar_style), s.sidebar_size, Setting::SidebarSize),
+        plain("Subagents", vec![(Setting::SubagentPanes, "own panes")]),
         plain("Show", agents(Setting::TabAgent)),
         plain("Windows", vec![(Setting::TabWindow(0), "5h"), (Setting::TabWindow(1), "Weekly"), (Setting::TabWindow(2), "Monthly")]),
         Item { label: "Style", kind: Kind::Styles, options: tab_styles },
@@ -114,6 +116,7 @@ fn is_on(s: &Settings, what: Setting) -> bool {
         Setting::OneLine(b) => s.one_line == b,
         Setting::SidebarStyle(st) => s.sidebar_style == st,
         Setting::SidebarSize(d) => s.sidebar_size == d,
+        Setting::SubagentPanes => s.subagent_panes,
         Setting::TabAgent(i) => s.tab_agents[i],
         Setting::TabWindow(i) => s.tab_windows[i],
         Setting::TabStyle(st) => s.tab_style == st,
@@ -141,6 +144,7 @@ fn apply(s: &Settings, what: Setting) -> Settings {
         Setting::OneLine(b) => s.one_line = b,
         Setting::SidebarStyle(st) => s.sidebar_style = st,
         Setting::SidebarSize(d) => s.sidebar_size = d,
+        Setting::SubagentPanes => s.subagent_panes = !s.subagent_panes,
         Setting::TabAgent(i) => s.tab_agents[i] = !s.tab_agents[i],
         Setting::TabWindow(i) => toggle_window(&mut s.tab_windows, i),
         Setting::TabStyle(st) => s.tab_style = st,
@@ -192,9 +196,9 @@ fn commit(before: &Settings, after: &Settings) {
 const COL: [usize; 3] = [15, 28, 41]; // where options start, three to a row
 const STYLE_COL: [usize; 5] = [15, 26, 36, 48, 60]; // the style rows'
 const PREVIEW: usize = 58;
-const HEADINGS: [(usize, &str); 3] = [(2, "Usage dock"), (8, "Agent sidebar"), (14, "Tab bar")];
-const FIRST_ROW: [usize; 12] = [3, 4, 5, 6, 9, 10, 11, 12, 15, 16, 17, 18]; // each item's screen row
-const FOOTER: usize = 20;
+const HEADINGS: [(usize, &str); 3] = [(2, "Usage dock"), (8, "Agent sidebar"), (15, "Tab bar")];
+const FIRST_ROW: [usize; 13] = [3, 4, 5, 6, 9, 10, 11, 12, 13, 16, 17, 18, 19]; // each item's screen row
+const FOOTER: usize = 21;
 
 fn starts(item: &Item) -> Vec<usize> {
     match (item.kind, item.options.len()) {
@@ -362,6 +366,7 @@ mod tests {
         let one = Settings { windows: [true, false, false], ..s.clone() };
         assert_eq!(apply(&one, Setting::Window(0)).windows, [true, false, false], "the dock keeps a window");
         assert!(apply(&s, Setting::OneLine(true)).one_line);
+        assert!(!s.subagent_panes && apply(&s, Setting::SubagentPanes).subagent_panes, "off until asked for");
         assert!(apply(&s, Setting::TabAgent(2)).tab_agents[2]);
         assert_eq!(apply(&s, Setting::TabStyle(None)).tab_style, None);
         assert_eq!(apply(&s, Setting::Fixed), s);

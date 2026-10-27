@@ -335,6 +335,11 @@ pub fn subagent(event: &str) -> Result<(), String> {
     let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut payload);
     let hook: Value = serde_json::from_str(&payload).unwrap_or_default();
     let Some(id) = hook["agent_id"].as_str().filter(|i| !i.is_empty()) else { return Ok(()) };
+    // off until asked for in the settings: it opens a tab; a stop still
+    // closes a view opened while it was on
+    if start && !crate::settings::load().subagent_panes {
+        return Ok(());
+    }
     {
         // parallel subagents start together: one at a time, so they share
         // one subagents tab and one file

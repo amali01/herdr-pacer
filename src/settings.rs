@@ -29,6 +29,9 @@ pub struct Settings {
     pub one_line: bool,
     pub sidebar_style: Style,
     pub sidebar_size: u8,
+    /// Each Claude subagent its own pane, listed under its agent (tree.rs);
+    /// off until asked for, since it opens a tab.
+    pub subagent_panes: bool,
     /// Tab bar: agents with a segment (none: the view is off), windows shown,
     /// and a style, None for the numbers alone.
     pub tab_agents: [bool; 3],
@@ -53,6 +56,7 @@ impl Default for Settings {
             one_line: false,
             sidebar_style: Style::Dots,
             sidebar_size: 2,
+            subagent_panes: false,
             tab_agents: [false; 3],
             tab_windows: [true, true, false],
             tab_style: Some(Style::Dots),
@@ -112,6 +116,7 @@ pub fn load() -> Settings {
         one_line: v["sidebar"]["layout"] == "line",
         sidebar_style: style(&v["sidebar"], d.sidebar_style),
         sidebar_size: size(&v["sidebar"], d.sidebar_size),
+        subagent_panes: v["sidebar"]["subagent_panes"] == true,
         tab_agents: flags(&v["tabbar"]["agents"], AGENTS.map(|a| a.0), d.tab_agents),
         tab_windows: flags(&v["tabbar"]["windows"], WINDOWS.map(|w| w.0), d.tab_windows),
         // 0.8 saved the numbers alone as zero dots
@@ -163,6 +168,7 @@ pub fn save(s: &Settings) {
             "layout": if s.one_line { "line" } else { "rows" },
             "style": s.sidebar_style.name(),
             "size": s.sidebar_size,
+            "subagent_panes": s.subagent_panes,
         },
         "tabbar": {
             "agents": object(AGENTS.map(|a| a.0), s.tab_agents),
@@ -207,6 +213,7 @@ mod tests {
             metrics: [true, true, false],
             one_line: true,
             sidebar_style: Style::Slants,
+            subagent_panes: true,
             tab_agents: [true, false, true],
             tab_style: None,
             claude_dirs: vec!["~/.claude-2".into()],
