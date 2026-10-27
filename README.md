@@ -48,13 +48,17 @@ disappears. So the bars ride on pane metadata, and show up only for sessions
 that report one — and only for what the settings turn on.
 
 ```
-ctx  58% ⣤⣤⣤⣤⣤⣤⣀⣀⣀⣀      a row each                ctx 58%⠀5h 13%⠀wk 49%    one line
+ctx  58% ⣤⣤⣤⣤⣤⣤⣀⣀⣀⣀      a row each                ᶜᵗˣ58 ⁵ʰ13 ʷᵏ49    one line
 5h   13% ⣤⡄⣀⣀⣀⣀⣀⣀⣀⣀
 wk   49% ⣤⣤⣤⣤⣤⣀⣀⣀⣀⣀
 ```
 
-On one line the bars shrink with the number of metrics — a full bar for one, a
-stub for two, the numbers alone for three — so the line fits the sidebar.
+On one line, stock Herdr gets the numbers alone, their labels in superscript,
+as one token in the color of the fullest window (see the agent tree below).
+With the glue patch the line keeps its bars, shrinking with the number of
+metrics — a full bar for one, a stub for two, the numbers alone for three. With
+a row each, a bar that would not fit after the agent tree's lines shows its
+percentage alone.
 
 Two details made it work:
 
@@ -167,9 +171,10 @@ fine and takes the theme's peach, yellow or red as its fullest window gets
 high.
 
 Claude Code's own subagents run inside its process, so Herdr never lists
-them. `claude-hook install` (which `setup` runs) also adds Claude's
-SubagentStart and SubagentStop hooks, async, beside any of yours. Each
-subagent then gets a pane of its own in its workspace's `subagents` tab: a
+them. Turn on **Subagents: own panes** in the settings popup (it is off
+until you do, since it opens a tab), and `claude-hook install` (which
+`setup` runs) adds Claude's SubagentStart and SubagentStop hooks, async,
+beside any of yours. Each subagent then gets a pane of its own in its workspace's `subagents` tab: a
 live view of its task, its tool calls and what it says. That pane is listed
 as an agent under the one that started it, named after its task, with its
 own circle and context bar on its parent's account, and a click takes you
@@ -208,6 +213,7 @@ Agent sidebar
   Layout     (•) a row each            ( ) one line
   Style      (•) Dots   ( ) Bar   ( ) Blocks  ( ) Slants
   Rows       ( ) 1 row    (•) 2 rows   ( ) 3 rows       ⣤⣤⣤⣤⣤⣀⣀⣀ 64%
+  Subagents  [ ] own panes
 Tab bar
   Show       [ ] Codex    [ ] Claude   [ ] OpenCode
   Windows    [x] 5h       [x] Weekly   [ ] Monthly
