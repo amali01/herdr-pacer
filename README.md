@@ -137,23 +137,21 @@ itself as the parent on the worker's pane before it starts the worker:
 herdr pane report-metadata <pane> --source orchestrator --token pacer_parent=$HERDR_PANE_ID
 ```
 
-The Agents list (its header reads `tree`) then draws the tree: each worker
-under the agent that started it, its status circle beside its name, and below
-it where it runs and which agent it is. A worker leaves out the workspace and
-tab its parent already shows, and long details wrap rather than get cut:
+The Agents list (its header reads `tree`) then gives each agent one line,
+each worker under the agent that started it: its status circle and name, its
+repo, and its account in superscript. A repo's agents sit together, its
+worktrees included. An orchestrator goes by its repo (`gh-dash orch`,
+numbered when one repo runs several), and a worker leaves out the repo its
+parent already shows. The usage bars follow on their own line:
 
 ```
-● orch
-│ herdr-pacer · build
-│ claude
-├─ ○ api
-│    claude
-└─ ● ui-x
-   │ claude
-   ├─ ○ ui-b
-   │    claude
-   └─ ● docs
-        2 · codex
+● gh-dash orch 1 · ᶜˡᵃᵘᵈᵉ⁻³
+├─ ○ api · ᶜˡᵃᵘᵈᵉ
+└─ ● ui-x · ᶜˡᵃᵘᵈᵉ
+   └─ ● docs · herdr-pacer ᶜᵒᵈᵉˣ
+● gh-dash orch 2 · ᶜˡᵃᵘᵈᵉ
+└─ ○ ui-b · ᶜˡᵃᵘᵈᵉ
+○ claude · gh-dash ᶜˡᵃᵘᵈᵉ
 ```
 
 A line takes its agent's status color: green idle, yellow working, red

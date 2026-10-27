@@ -3,18 +3,19 @@
 //!
 //!   herdr pane report-metadata <pane> --source orchestrator --token pacer_parent=$HERDR_PANE_ID
 //!
-//! and the Agents view, sorted so each child sits under its parent, draws
-//! the tree with each agent's status circle beside its name and its
-//! workspace, tab and agent wrapped below, the lines unbroken:
+//! and the Agents view, sorted so each child sits under its parent and each
+//! repo's agents (its worktrees too) sit together, gives each agent one line:
+//! the tree, its status circle and name, its repo and, in superscript, its
+//! account. An orchestrator goes by its repo, numbered when the repo has
+//! more than one; a worker leaves out the repo its parent shows:
 //!
-//!   ● orch
-//!   │ herdr-pacer · 1
-//!   ├─ ○ ui
-//!   │  │ herdr-pacer · 1
-//!   │  └─ ● ui-table
-//!   │       herdr-pacer · 1
-//!   └─ ○ api
-//!        herdr-pacer · 1
+//!   ● gh-dash orch 1 · ᶜˡᵃᵘᵈᵉ⁻³
+//!   ├─ ○ ui · ᶜˡᵃᵘᵈᵉ
+//!   │  └─ ● ui-table · ᶜᵒᵈᵉˣ
+//!   └─ ○ docs · herdr-pacer ᶜˡᵃᵘᵈᵉ
+//!   ● gh-dash orch 2 · ᶜˡᵃᵘᵈᵉ
+//!   └─ ○ api · ᶜˡᵃᵘᵈᵉ
+//!   ○ claude · gh-dash ᶜˡᵃᵘᵈᵉ
 //!
 //! An agent no one started is a root; a link to a pane that holds no agent
 //! counts as none, and a loop is cut at one of its agents. The sort lives in
@@ -34,36 +35,34 @@ pub const STATES: [(&str, &str, &str); 5] = [
     ("unknown", "○", "#8a8494"),
 ];
 
-/// The rows an agent's details wrap onto; past the last, the rest is cut.
-pub const WHERE: [&str; 3] = ["pacer_where", "pacer_where2", "pacer_where3"];
-
 struct Node {
     pane: String,
     label: String,
     parent: Option<String>,
     status: String,
-    /// where it runs: workspace and tab, one piece per name between ` · `
-    place: Vec<String>,
-    agent: Option<String>,
+    /// the git repo it runs in, the main one for a worktree, and what tells
+    /// two repos of the same name apart
+    repo: Option<String>,
+    repo_key: Option<String>,
+    account: Option<String>,
 }
 
-/// An agent's place: what leads its own line (the rails and its branch),
-/// what leads its children's (`cont`), and its sort key.
+/// An agent's place: the parent it is drawn under, what leads its line (the
+/// rails and its branch), and its sort key.
 #[derive(Clone, Debug, Default, PartialEq)]
 struct Place {
-    /// the parent it is drawn under
     up: Option<usize>,
     head: String,
-    cont: String,
-    kids: bool,
     key: String,
 }
 
 /// Each agent's place, in agent.list order. Keys are fixed-width positions
 /// joined by '.', so a child sorts after its parent and before the parent's
-/// next sibling.
+/// next sibling; they start with the repo's first agent, so a repo's trees
+/// sit together.
 fn layout(nodes: &[Node]) -> Vec<Place> {
     let at = |pane: &str| nodes.iter().position(|n| n.pane == pane);
+    let group = |i: usize| nodes.iter().position(|n| n.repo_key.is_some() && n.repo_key == nodes[i].repo_key).unwrap_or(i);
     let parent = |i: usize| nodes[i].parent.as_deref().and_then(at).filter(|&p| p != i);
     let children: Vec<Vec<usize>> = (0..nodes.len()).map(|p| (0..nodes.len()).filter(|&c| parent(c) == Some(p)).collect()).collect();
     let mut out = vec![Place::default(); nodes.len()];
@@ -80,7 +79,7 @@ fn layout(nodes: &[Node]) -> Vec<Place> {
         while let Some(p) = parent(top).filter(|&p| !std::mem::replace(&mut climbed[p], true)) {
             top = p;
         }
-        let mut stack = vec![(top, None, String::new(), None::<bool>, format!("{top:04}"))];
+        let mut stack = vec![(top, None, String::new(), None::<bool>, format!("{:04}.{top:04}", group(top)))];
         while let Some((n, up, prefix, last, key)) = stack.pop() {
             if std::mem::replace(&mut seen[n], true) {
                 continue;
@@ -94,7 +93,7 @@ fn layout(nodes: &[Node]) -> Vec<Place> {
             for (k, &c) in kids.iter().enumerate().rev() {
                 stack.push((c, Some(n), cont.clone(), Some(k + 1 == kids.len()), format!("{key}.{c:04}")));
             }
-            out[n] = Place { up, head: format!("{prefix}{branch}"), cont, kids: !kids.is_empty(), key };
+            out[n] = Place { up, head: format!("{prefix}{branch}"), key };
         }
     }
     out
@@ -108,46 +107,59 @@ fn lead(line: String) -> String {
     }
 }
 
-/// Pieces joined by ` · ` onto at most `rows` lines of `width` cells. Only a
-/// piece too long for a line of its own, or what overflows the last line, is
-/// cut. shortcut: counts chars as cells, so wide emoji may still get cut by Herdr.
-fn wrap(pieces: &[String], width: usize, rows: usize) -> Vec<String> {
-    let len = |s: &str| s.chars().count();
-    let fit = |s: &str| if len(s) <= width { s.to_string() } else { s.chars().take(width.saturating_sub(1)).collect::<String>() + "…" };
-    let mut lines: Vec<String> = vec![];
-    for p in pieces {
-        match lines.last_mut() {
-            Some(l) if len(l) + 3 + len(p) <= width => *l += &format!(" · {p}"),
-            _ => lines.push(fit(p)),
-        }
-    }
-    if lines.len() > rows {
-        let rest = lines.split_off(rows - 1).join(" · ");
-        lines.push(fit(&rest));
-    }
-    lines
+/// A terminal has one font size; superscript is the smallest text it draws.
+/// There is no superscript q, so it stays as it is.
+fn tiny(s: &str) -> String {
+    let (from, to) = ("abcdefghijklmnoprstuvwxyz0123456789-", "ᵃᵇᶜᵈᵉᶠᵍʰⁱʲᵏˡᵐⁿᵒᵖʳˢᵗᵘᵛʷˣʸᶻ⁰¹²³⁴⁵⁶⁷⁸⁹⁻");
+    s.chars().map(|c| c.to_ascii_lowercase()).map(|c| from.chars().zip(to.chars()).find(|f| f.0 == c).map_or(c, |f| f.1)).collect()
 }
 
-/// The tokens that draw one agent: its line, colored by status, its details
-/// below the rails, and its sort key. Unused ones are cleared. Its details
-/// leave out where it runs when that is where its parent runs.
-fn tokens(p: &Place, n: &Node, up: Option<&Node>, width: usize) -> Map<String, Value> {
+/// The name an orchestrator (a root with workers) goes by: its repo, and a
+/// number when the repo has more than one. None for every other agent.
+fn orchestrators(nodes: &[Node], places: &[Place]) -> Vec<Option<String>> {
+    let orch = |i: usize| places[i].up.is_none() && nodes[i].repo.is_some() && places.iter().any(|p| p.up == Some(i));
+    let mut all: Vec<usize> = (0..nodes.len()).filter(|&i| orch(i)).collect();
+    all.sort_by_key(|&i| &places[i].key);
+    (0..nodes.len())
+        .map(|i| {
+            let repo = nodes[i].repo.as_deref().filter(|_| orch(i))?;
+            let same: Vec<usize> = all.iter().copied().filter(|&j| nodes[j].repo_key == nodes[i].repo_key).collect();
+            Some(match same.iter().position(|&j| j == i) {
+                Some(k) if same.len() > 1 => format!("{repo} orch {}", k + 1),
+                _ => format!("{repo} orch"),
+            })
+        })
+        .collect()
+}
+
+/// Every agent's tokens, in agent.list order. Its repo shows unless its name
+/// carries it or its parent shows the same.
+fn draw(nodes: &[Node], places: &[Place]) -> Vec<Map<String, Value>> {
+    let names = orchestrators(nodes, places);
+    nodes
+        .iter()
+        .zip(places)
+        .zip(names)
+        .map(|((n, p), name)| {
+            let up = p.up.map(|u| &nodes[u]);
+            let repo = n.repo.as_deref().filter(|&r| name.is_none() && up.is_none_or(|u| u.repo.as_deref() != Some(r)));
+            tokens(p, n, name.as_deref().unwrap_or(&n.label), repo)
+        })
+        .collect()
+}
+
+/// The tokens that draw one agent: its line in its status color, its repo
+/// and account, and its sort key.
+fn tokens(p: &Place, n: &Node, name: &str, repo: Option<&str>) -> Map<String, Value> {
     let status = STATES.iter().find(|s| s.0 == n.status).map_or("unknown", |s| s.0);
     let mut map = Map::new();
     for (state, circle, _) in STATES {
-        // Herdr starts an agent's first row two cells left of the rest
-        let line = (state == status).then(|| lead(format!("  {}{circle} {}", p.head, n.label)));
+        // Herdr starts a row that has no state_icon two cells further left
+        let line = (state == status).then(|| lead(format!("  {}{circle} {name}", p.head)));
         map.insert(format!("pacer_tree_{state}"), line.map_or(Value::Null, Value::from));
     }
-    let prefix = format!("{}{}", p.cont, if p.kids { "│ " } else { "  " });
-    let mut detail: Vec<String> = n.place.iter().filter(|w| !up.is_some_and(|u| u.place.contains(w))).chain(&n.agent).cloned().collect();
-    // a tab named after its workspace or agent (auto-title) says it once
-    let mut said = std::collections::HashSet::new();
-    detail.retain(|w| said.insert(w.clone()));
-    let lines = wrap(&detail, width.saturating_sub(prefix.chars().count()).max(1), WHERE.len());
-    for (i, token) in WHERE.iter().enumerate() {
-        map.insert(token.to_string(), lines.get(i).map_or(Value::Null, |l| lead(format!("{prefix}{l}")).into()));
-    }
+    let with: Vec<String> = repo.map(String::from).into_iter().chain(n.account.as_deref().map(tiny)).collect();
+    map.insert("pacer_repo".into(), if with.is_empty() { Value::Null } else { with.join(" ").into() });
     map.insert("pacer_tree_key".into(), p.key.clone().into());
     map
 }
@@ -166,42 +178,38 @@ pub fn sync() -> herdr::Result<()> {
     let _held = lock.as_ref().map(|f| f.lock());
     let list = |method: &str, key: &str| call(method, json!({})).map(|r| r[key].as_array().cloned().unwrap_or_default());
     let text = |a: &Value, k: &str| a[k].as_str().filter(|s| !s.is_empty()).map(String::from);
-    let labels = |items: Vec<Value>, id: &str| -> HashMap<String, String> {
-        items.iter().filter_map(|w| Some((text(w, id)?, text(w, "label")?))).collect()
-    };
     let agents = list("agent.list", "agents")?;
-    let workspaces = labels(list("workspace.list", "workspaces")?, "workspace_id");
-    let tabs = labels(list("tab.list", "tabs")?, "tab_id");
+    // a workspace in a git repo names it, worktrees the main one; others go by their label
+    let repos: HashMap<String, (String, Option<String>)> = list("workspace.list", "workspaces")?
+        .iter()
+        .filter_map(|w| {
+            let tree = &w["worktree"];
+            Some((text(w, "workspace_id")?, (text(tree, "repo_name").or_else(|| text(w, "label"))?, text(tree, "repo_key"))))
+        })
+        .collect();
     let nodes: Vec<Node> = agents
         .iter()
         .map(|a| {
-            let at = |labels: &HashMap<String, String>, id: &str| labels.get(a[id].as_str().unwrap_or_default()).cloned();
-            let place = [at(&workspaces, "workspace_id"), at(&tabs, "tab_id")]
-                .into_iter()
-                .flatten()
-                .flat_map(|s| s.split(" · ").map(|w| w.trim().to_string()).collect::<Vec<_>>())
-                .filter(|w| !w.is_empty())
-                .collect();
+            let (repo, repo_key) = repos.get(a["workspace_id"].as_str().unwrap_or_default()).cloned().unzip();
             Node {
                 pane: text(a, "pane_id").unwrap_or_default(),
                 label: text(a, "name").or_else(|| text(a, "agent")).unwrap_or_else(|| "agent".into()),
                 parent: text(&a["tokens"], "pacer_parent"),
                 status: text(a, "agent_status").unwrap_or_default(),
-                place,
-                agent: text(a, "display_agent").or_else(|| text(a, "agent")),
+                repo,
+                repo_key: repo_key.flatten(),
+                account: text(a, "display_agent").or_else(|| text(a, "agent")),
             }
         })
         .collect();
-    // the content width: the sidebar less its margins and border
-    let width = (ui("sidebar_width").and_then(|w| w.as_integer()).unwrap_or(26) as usize).saturating_sub(4);
-    let mut failed = None;
     let mut places = layout(&nodes);
     if priority() {
         // Herdr orders by attention, not by the tree: no branches to mislead
         places.iter_mut().for_each(|p| *p = Place { key: std::mem::take(&mut p.key), ..Place::default() });
     }
-    for ((place, node), a) in places.iter().zip(&nodes).zip(&agents) {
-        let changed: Map<String, Value> = tokens(place, node, place.up.map(|u| &nodes[u]), width).into_iter().filter(|(k, v)| &a["tokens"][k] != v).collect();
+    let mut failed = None;
+    for ((want, node), a) in draw(&nodes, &places).into_iter().zip(&nodes).zip(&agents) {
+        let changed: Map<String, Value> = want.into_iter().filter(|(k, v)| &a["tokens"][k] != v).collect();
         if node.pane.is_empty() || changed.is_empty() {
             continue;
         }
@@ -236,81 +244,94 @@ mod tests {
     use super::*;
 
     fn node(pane: &str, label: &str, parent: Option<&str>) -> Node {
-        let place = vec!["herdr-pacer".into(), "1".into()];
-        Node { pane: pane.into(), label: label.into(), parent: parent.map(String::from), status: "idle".into(), place, agent: Some("claude".into()) }
+        let (repo, repo_key, account) = (Some("gh-dash".into()), Some("/gh-dash/.git".into()), Some("claude".into()));
+        Node { pane: pane.into(), label: label.into(), parent: parent.map(String::from), status: "idle".into(), repo, repo_key, account }
     }
 
-    /// Every agent's lines, in sort order, as the sidebar draws them.
-    fn drawn(nodes: &[Node], width: usize) -> Vec<String> {
+    fn in_repo(mut n: Node, repo: &str) -> Node {
+        (n.repo, n.repo_key) = (Some(repo.into()), Some(format!("/{repo}/.git")));
+        n
+    }
+
+    /// Every agent's line, in sort order, as the sidebar draws it.
+    fn drawn(nodes: &[Node]) -> Vec<String> {
         let places = layout(nodes);
-        let mut order: Vec<usize> = (0..nodes.len()).collect();
-        order.sort_by_key(|&i| places[i].key.clone());
-        let row = |m: &Map<String, Value>, k: &str| m[k].as_str().map(String::from);
-        order
+        let mut lines: Vec<(String, String)> = draw(nodes, &places)
             .iter()
-            .flat_map(|&i| {
-                let m = tokens(&places[i], &nodes[i], places[i].up.map(|u| &nodes[u]), width);
-                let head = STATES.iter().find_map(|s| row(&m, &format!("pacer_tree_{}", s.0)));
-                head.into_iter().chain(WHERE.iter().filter_map(|w| row(&m, w))).collect::<Vec<_>>()
+            .map(|m| {
+                let line = STATES.iter().find_map(|s| m[&format!("pacer_tree_{}", s.0)].as_str()).unwrap();
+                (m["pacer_tree_key"].as_str().unwrap().into(), format!("{line} · {}", m["pacer_repo"].as_str().unwrap_or_default()))
             })
-            .collect()
+            .collect();
+        lines.sort();
+        lines.into_iter().map(|l| l.1).collect()
     }
 
     #[test]
-    fn children_sit_under_their_parent_with_unbroken_lines() {
-        let nodes = [
+    fn an_orchestrator_goes_by_its_repo_and_its_workers_sit_under_it() {
+        let mut nodes = [
             node("p1", "orch", None),
             node("p2", "ui-table", Some("p3")),
             node("p3", "ui", Some("p1")),
-            node("p4", "lone", None),
-            node("p5", "api", Some("p1")),
+            in_repo(node("p4", "lone", None), "herdr-pacer"),
+            in_repo(node("p5", "docs", Some("p1")), "herdr-pacer"),
         ];
-        let mut nodes = nodes;
-        nodes[4].place[1] = "2".into(); // api runs in another tab
+        nodes[0].account = Some("Claude-3".into());
+        nodes[1].account = Some("codex".into());
         assert_eq!(
-            drawn(&nodes, 40),
+            drawn(&nodes),
             [
-                "⠀ ○ orch",
-                "│ herdr-pacer · 1 · claude",
-                "⠀ ├─ ○ ui",
-                "│  │ claude",
-                "⠀ │  └─ ○ ui-table",
-                "│       claude",
-                "⠀ └─ ○ api",
-                "⠀    2 · claude",
-                "⠀ ○ lone",
-                "⠀ herdr-pacer · 1 · claude",
+                "⠀ ○ gh-dash orch · ᶜˡᵃᵘᵈᵉ⁻³",
+                "⠀ ├─ ○ ui · ᶜˡᵃᵘᵈᵉ",
+                "⠀ │  └─ ○ ui-table · ᶜᵒᵈᵉˣ",
+                "⠀ └─ ○ docs · herdr-pacer ᶜˡᵃᵘᵈᵉ",
+                "⠀ ○ lone · herdr-pacer ᶜˡᵃᵘᵈᵉ",
             ]
         );
     }
 
     #[test]
-    fn details_wrap_rather_than_cut() {
-        let mut nodes = [node("p1", "orch", None), node("p2", "ui", Some("p1"))];
-        nodes[1].place = vec!["other-repo".into(), "3".into()];
-        assert_eq!(drawn(&nodes, 18), ["⠀ ○ orch", "│ herdr-pacer · 1", "│ claude", "⠀ └─ ○ ui", "⠀    other-repo", "⠀    3 · claude"]);
-        let pieces: Vec<String> = ["a-very-long-workspace-name", "1", "claude", "x", "y"].map(String::from).to_vec();
-        assert_eq!(wrap(&pieces, 10, 2), ["a-very-lo…", "1 · claud…"]);
-        assert_eq!(wrap(&pieces[1..], 10, 3), ["1 · claude", "x · y"]);
+    fn a_repos_agents_sit_together_and_its_orchestrators_are_numbered() {
+        let nodes = [
+            node("p1", "orch-a", None),
+            in_repo(node("p2", "other", None), "herdr-pacer"),
+            node("p3", "worker-a", Some("p1")),
+            node("p4", "lone", None),
+            node("p5", "orch-b", None),
+            node("p6", "worker-b", Some("p5")),
+        ];
+        assert_eq!(
+            drawn(&nodes),
+            [
+                "⠀ ○ gh-dash orch 1 · ᶜˡᵃᵘᵈᵉ",
+                "⠀ └─ ○ worker-a · ᶜˡᵃᵘᵈᵉ",
+                "⠀ ○ lone · gh-dash ᶜˡᵃᵘᵈᵉ",
+                "⠀ ○ gh-dash orch 2 · ᶜˡᵃᵘᵈᵉ",
+                "⠀ └─ ○ worker-b · ᶜˡᵃᵘᵈᵉ",
+                "⠀ ○ other · herdr-pacer ᶜˡᵃᵘᵈᵉ",
+            ]
+        );
     }
 
     #[test]
     fn the_line_takes_its_status_and_clears_the_others() {
         let mut n = node("p1", "orch", None);
         n.status = "blocked".into();
-        let m = tokens(&layout(std::slice::from_ref(&n))[0], &n, None, 22);
+        let m = tokens(&layout(std::slice::from_ref(&n))[0], &n, "orch", None);
         assert_eq!(m["pacer_tree_blocked"], "⠀ ● orch");
-        assert!(m["pacer_tree_idle"].is_null() && m["pacer_where3"].is_null());
+        assert!(m["pacer_tree_idle"].is_null());
         n.status = "something-new".into();
-        assert_eq!(tokens(&Place::default(), &n, None, 22)["pacer_tree_unknown"], "⠀ ○ orch");
+        assert_eq!(tokens(&Place::default(), &n, "orch", None)["pacer_tree_unknown"], "⠀ ○ orch");
+        n.account = None;
+        assert!(tokens(&Place::default(), &n, "orch", None)["pacer_repo"].is_null(), "no repo or account, no token");
     }
 
     #[test]
     fn a_dead_or_looping_parent_makes_a_root() {
         let nodes = [node("p1", "a", Some("p2")), node("p2", "b", Some("p1")), node("p3", "c", Some("gone")), node("p4", "d", Some("p4"))];
         let out = layout(&nodes);
-        assert_eq!((out[0].head.as_str(), out[0].key.as_str()), ("", "0000"), "the loop is cut at its first agent");
-        assert_eq!((out[1].head.as_str(), out[1].key.as_str()), ("└─ ", "0000.0001"));
+        assert_eq!((out[0].head.as_str(), out[0].key.as_str()), ("", "0000.0000"), "the loop is cut at its first agent");
+        assert_eq!((out[1].head.as_str(), out[1].key.as_str()), ("└─ ", "0000.0000.0001"));
         assert_eq!(out[2].head, "");
         assert_eq!(out[3].head, "");
     }
